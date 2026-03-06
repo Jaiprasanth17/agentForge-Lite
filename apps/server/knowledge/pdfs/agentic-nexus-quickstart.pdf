@@ -1,0 +1,140 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 3467 >>
+stream
+BT
+/F1 11 Tf
+1 0 0 1 40 780 Tm
+(Agentic Nexus - Quick Start Guide) Tj
+1 0 0 1 40 766 Tm
+() Tj
+1 0 0 1 40 752 Tm
+(Welcome to Agentic Nexus, your AI agent builder and workflow automation platform.) Tj
+1 0 0 1 40 738 Tm
+() Tj
+1 0 0 1 40 724 Tm
+(Chapter 1: Getting Started) Tj
+1 0 0 1 40 710 Tm
+() Tj
+1 0 0 1 40 696 Tm
+(Agentic Nexus allows you to create AI agents, test them interactively, build multi-step workflows, and monitor execution with human-in-the-loop controls.) Tj
+1 0 0 1 40 682 Tm
+() Tj
+1 0 0 1 40 668 Tm
+(To get started:) Tj
+1 0 0 1 40 654 Tm
+(1. Navigate to New Agent in the sidebar) Tj
+1 0 0 1 40 640 Tm
+(2. Give your agent a name and select a model \(OpenAI, Anthropic, or Mock\)) Tj
+1 0 0 1 40 626 Tm
+(3. Write system instructions that define the agent behavior) Tj
+1 0 0 1 40 612 Tm
+(4. Toggle tools like Web Search, Code Interpreter, Memory, and Knowledge) Tj
+1 0 0 1 40 598 Tm
+(5. Set parameters like temperature, max tokens, and top-p) Tj
+1 0 0 1 40 584 Tm
+(6. Click Deploy to activate the agent) Tj
+1 0 0 1 40 570 Tm
+() Tj
+1 0 0 1 40 556 Tm
+(Chapter 2: Testing Agents) Tj
+1 0 0 1 40 542 Tm
+() Tj
+1 0 0 1 40 528 Tm
+(The Test Console provides a real-time chat interface:) Tj
+1 0 0 1 40 514 Tm
+(- Messages stream via WebSocket for low-latency responses) Tj
+1 0 0 1 40 500 Tm
+(- Enable Run with Tools to allow the agent to use configured tools) Tj
+1 0 0 1 40 486 Tm
+(- Enable Human-in-the-Loop to approve or reject tool calls before execution) Tj
+1 0 0 1 40 472 Tm
+(- View token usage and latency statistics after each response) Tj
+1 0 0 1 40 458 Tm
+(- Use the curl snippet to reproduce test runs programmatically) Tj
+1 0 0 1 40 444 Tm
+() Tj
+1 0 0 1 40 430 Tm
+(Chapter 3: Building Workflows) Tj
+1 0 0 1 40 416 Tm
+() Tj
+1 0 0 1 40 402 Tm
+(Workflows let you chain multiple agents into automated pipelines:) Tj
+1 0 0 1 40 388 Tm
+(- Each workflow consists of ordered steps) Tj
+1 0 0 1 40 374 Tm
+(- Steps can be assigned to specific agents or run as orchestrator messages) Tj
+1 0 0 1 40 360 Tm
+(- Steps can require human approval before execution) Tj
+1 0 0 1 40 346 Tm
+(- Triggers include manual, scheduled \(cron\), webhook, and event-based) Tj
+1 0 0 1 40 332 Tm
+(- The Run Console shows step-by-step progress with streaming logs) Tj
+1 0 0 1 40 318 Tm
+() Tj
+1 0 0 1 40 304 Tm
+(Chapter 4: Knowledge Base \(RAG\)) Tj
+1 0 0 1 40 290 Tm
+() Tj
+1 0 0 1 40 276 Tm
+(The Knowledge feature enables Retrieval-Augmented Generation:) Tj
+1 0 0 1 40 262 Tm
+(- Drop PDF files into the knowledge/pdfs directory) Tj
+1 0 0 1 40 248 Tm
+(- Run the ingestion script to parse and chunk documents) Tj
+1 0 0 1 40 234 Tm
+(- Enable the Knowledge tool on your agents) Tj
+1 0 0 1 40 220 Tm
+(- Agents will search the knowledge base and include relevant citations) Tj
+1 0 0 1 40 206 Tm
+(- Supports BM25 local search \(no API keys\) and OpenAI embeddings) Tj
+1 0 0 1 40 192 Tm
+() Tj
+1 0 0 1 40 178 Tm
+(Chapter 5: Providers and Models) Tj
+1 0 0 1 40 164 Tm
+() Tj
+1 0 0 1 40 150 Tm
+(Agentic Nexus supports multiple LLM providers:) Tj
+1 0 0 1 40 136 Tm
+(- OpenAI: gpt-4o-mini, gpt-4o, o3-mini) Tj
+1 0 0 1 40 122 Tm
+(- Anthropic: claude-3-haiku, claude-3-sonnet, claude-3.5-sonnet) Tj
+1 0 0 1 40 108 Tm
+(- Mock: Three mock models for offline development and testing) Tj
+1 0 0 1 40 94 Tm
+(- Set your API keys in the .env file) Tj
+1 0 0 1 40 80 Tm
+(- The Mock provider requires no keys and returns simulated responses) Tj
+1 0 0 1 40 66 Tm
+() Tj
+1 0 0 1 40 52 Tm
+(Chapter 6: Tool System) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000003760 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+3830
+%%EOF

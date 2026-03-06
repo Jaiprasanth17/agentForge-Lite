@@ -3,9 +3,10 @@ import { URL } from "url";
 import { IncomingMessage } from "http";
 import prisma from "./db/prismaClient";
 import { getProvider } from "./providers";
-import { webSearch } from "./tools/webSearch";
-import { codeInterpreter } from "./tools/codeInterpreter";
-import { storeMemory, recallMemory } from "./tools/memory";
+import { invokeTool } from "./tools";
+import { storeMemory } from "./tools/memory";
+import { knowledgeService } from "./knowledge/service";
+import type { ToolContext } from "./tools/types";
 
 interface WSMessage {
   type: string;
@@ -13,6 +14,14 @@ interface WSMessage {
   toolApproval?: { toolCallId: string; approved: boolean };
   runWithTools?: boolean;
   humanInTheLoop?: boolean;
+}
+
+function buildToolContext(agentId: string): ToolContext {
+  return {
+    logger: console.log,
+    knowledge: knowledgeService,
+    agentId,
+  };
 }
 
 export function setupWebSocket(wss: WebSocketServer): void {
@@ -39,6 +48,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
     let runWithTools = true;
     let humanInTheLoop = false;
     const pendingToolApprovals = new Map<string, { name: string; args: string; resolve: (approved: boolean) => void }>();
+    const toolCtx = buildToolContext(agentId);
 
     ws.send(JSON.stringify({ type: "connected", agentId, agentName: agent.name }));
 
@@ -75,18 +85,24 @@ export function setupWebSocket(wss: WebSocketServer): void {
         // Store in memory if enabled
         if (tools.memory && runWithTools) {
           await storeMemory(msg.text, agentId);
-          const recalled = await recallMemory(msg.text, 3);
-          if (recalled.length > 0) {
-            const memoryContext = recalled
-              .filter((r) => r.score > 0.3)
-              .map((r) => r.text)
-              .join("\n");
-            if (memoryContext) {
+          const memResult = await invokeTool(toolCtx, "memory", { query: msg.text, topK: 3 });
+          if (memResult.ok) {
+            const recalled = memResult.data as { text: string; score: number }[];
+            if (recalled.length > 0) {
               ws.send(
                 JSON.stringify({
-                  type: "tool_result",
-                  tool: "memory",
-                  result: `Recalled ${recalled.length} relevant memories`,
+                  type: "tool_call_started",
+                  name: "memory",
+                  input: { query: msg.text, topK: 3 },
+                })
+              );
+              ws.send(
+                JSON.stringify({
+                  type: "tool_call_result",
+                  name: "memory",
+                  ok: true,
+                  data: `Recalled ${recalled.length} relevant memories`,
+                  ms: (memResult.meta as Record<string, unknown>)?.ms || 0,
                 })
               );
             }
@@ -102,7 +118,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
         const provider = getProvider(providerName);
 
         // Build available tools list for the provider
-        const availableTools: any[] = [];
+        const availableTools: { type: string; function: { name: string; description: string; parameters: object } }[] = [];
         if (runWithTools) {
           if (tools.webSearch) {
             availableTools.push({
@@ -110,7 +126,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
               function: {
                 name: "webSearch",
                 description: "Search the web for information",
-                parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+                parameters: { type: "object", properties: { query: { type: "string" }, topK: { type: "number" } }, required: ["query"] },
               },
             });
           }
@@ -124,6 +140,16 @@ export function setupWebSocket(wss: WebSocketServer): void {
               },
             });
           }
+          if (tools.knowledge) {
+            availableTools.push({
+              type: "function",
+              function: {
+                name: "knowledgeSearch",
+                description: "Search the local PDF knowledge base for relevant information with citations",
+                parameters: { type: "object", properties: { query: { type: "string" }, topK: { type: "number" } }, required: ["query"] },
+              },
+            });
+          }
         }
 
         await provider.generate({
@@ -131,9 +157,9 @@ export function setupWebSocket(wss: WebSocketServer): void {
           system: agent.system || undefined,
           messages: conversationMessages,
           tools: availableTools.length > 0 ? availableTools : undefined,
-          temperature: parameters.temperature,
-          maxTokens: parameters.maxTokens,
-          topP: parameters.topP,
+          temperature: parameters.temperature as number,
+          maxTokens: parameters.maxTokens as number,
+          topP: parameters.topP as number,
           reasoning: tools.advancedReasoning,
           onChunk: async (chunk) => {
             if (chunk.text) {
@@ -141,15 +167,33 @@ export function setupWebSocket(wss: WebSocketServer): void {
             }
             if (chunk.toolCall) {
               const toolCallId = chunk.toolCall.id || `tc_${Date.now()}`;
-              const toolName = chunk.toolCall.name || chunk.toolCall.function?.name;
-              const toolArgs = chunk.toolCall.arguments || chunk.toolCall.function?.arguments || "{}";
+              const toolName: string = chunk.toolCall.name || chunk.toolCall.function?.name || "";
+              const toolArgsRaw: string = chunk.toolCall.arguments || chunk.toolCall.function?.arguments || "{}";
+
+              // Parse tool arguments safely
+              let toolInput: Record<string, unknown> = {};
+              try {
+                toolInput = JSON.parse(toolArgsRaw);
+              } catch {
+                toolInput = {};
+              }
 
               ws.send(
                 JSON.stringify({
                   type: "tool_call",
                   toolCallId,
                   name: toolName,
-                  arguments: toolArgs,
+                  arguments: toolArgsRaw,
+                })
+              );
+
+              // Emit tool_call_started event
+              ws.send(
+                JSON.stringify({
+                  type: "tool_call_started",
+                  toolCallId,
+                  name: toolName,
+                  input: toolInput,
                 })
               );
 
@@ -160,12 +204,12 @@ export function setupWebSocket(wss: WebSocketServer): void {
                     type: "tool_pending",
                     toolCallId,
                     name: toolName,
-                    arguments: toolArgs,
+                    arguments: toolArgsRaw,
                   })
                 );
 
                 const approved = await new Promise<boolean>((resolve) => {
-                  pendingToolApprovals.set(toolCallId, { name: toolName, args: toolArgs, resolve });
+                  pendingToolApprovals.set(toolCallId, { name: toolName, args: toolArgsRaw, resolve });
                   // Auto-timeout after 60s
                   setTimeout(() => {
                     if (pendingToolApprovals.has(toolCallId)) {
@@ -181,29 +225,32 @@ export function setupWebSocket(wss: WebSocketServer): void {
                 }
               }
 
-              // Execute tool
-              let toolResult = "";
-              try {
-                if (toolName === "webSearch") {
-                  const parsed = JSON.parse(toolArgs);
-                  const results = await webSearch(parsed.query);
-                  toolResult = JSON.stringify(results, null, 2);
-                } else if (toolName === "codeInterpreter") {
-                  const parsed = JSON.parse(toolArgs);
-                  toolResult = await codeInterpreter(parsed.code);
-                } else {
-                  toolResult = `Unknown tool: ${toolName}`;
-                }
-              } catch (e: any) {
-                toolResult = `Tool error: ${e.message}`;
-              }
+              // Execute tool via registry
+              const result = await invokeTool(toolCtx, toolName, toolInput);
 
+              // Emit tool_call_result event
+              ws.send(
+                JSON.stringify({
+                  type: "tool_call_result",
+                  toolCallId,
+                  name: toolName,
+                  ok: result.ok,
+                  data: result.ok ? result.data : undefined,
+                  error: result.ok ? undefined : result.error,
+                  code: result.ok ? undefined : result.code,
+                  ms: (result.meta as Record<string, unknown>)?.ms || 0,
+                })
+              );
+
+              // Also send legacy tool_result for backward compatibility
               ws.send(
                 JSON.stringify({
                   type: "tool_result",
                   toolCallId,
                   tool: toolName,
-                  result: toolResult,
+                  result: result.ok
+                    ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2))
+                    : `Tool error: ${result.error}`,
                 })
               );
             }
@@ -222,8 +269,9 @@ export function setupWebSocket(wss: WebSocketServer): void {
 
         // Save assistant response to conversation
         // (We collect the full text from chunks on the client side)
-      } catch (err: any) {
-        ws.send(JSON.stringify({ type: "error", text: err.message }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        ws.send(JSON.stringify({ type: "error", text: message }));
       }
     });
   });

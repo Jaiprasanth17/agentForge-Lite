@@ -108,6 +108,7 @@ JWT_SECRET=dev-secret   # JWT signing secret (auth scaffold)
 | `npm run seed`   | Seed two sample agents             |
 | `npm run lint`   | Run TypeScript checks              |
 | `npm run test`   | Run all tests                      |
+| `npm run ingest:knowledge` | Ingest PDFs into knowledge base |
 
 ## Features
 
@@ -136,6 +137,7 @@ JWT_SECRET=dev-secret   # JWT signing secret (auth scaffold)
 - Provider API key configuration (via .env)
 - Dynamic model picker from each provider adapter
 - Environment information display
+- Knowledge Base status panel with document/chunk counts and reindex button
 
 ### Help & Onboarding Page
 - Animated explainer with Lottie (JSON vector animation) showing the end-to-end workflow
@@ -150,6 +152,64 @@ JWT_SECRET=dev-secret   # JWT signing secret (auth scaffold)
 **To customize the animation:** Replace `apps/client/src/assets/help/agentic_explainer.json` with your brand-approved Lottie JSON file (800×400px recommended, <1.2 MB).
 
 **To edit FAQ/steps:** Update `apps/client/src/components/help/help.copy.ts`.
+
+### Knowledge Base (PDF RAG)
+
+Agentic Nexus includes a built-in PDF knowledge base with retrieval-augmented generation (RAG).
+
+**How it works:**
+1. Drop PDF files into `apps/server/knowledge/pdfs/`
+2. Run `npm run ingest:knowledge` to parse, chunk, and index them
+3. Enable the "Knowledge" tool on any agent in the Agent Builder
+4. The agent can now search and cite your PDFs when answering questions
+
+**Providers:**
+- `bm25` (default): Works offline with no API keys. Uses BM25 term-frequency scoring.
+- `openai`: When `OPENAI_API_KEY` is set, uses `text-embedding-3-small` for semantic embeddings (higher relevance).
+
+Set `KNOWLEDGE_PROVIDER=bm25` or `KNOWLEDGE_PROVIDER=openai` in `.env`.
+
+**Endpoints:**
+| Method | Endpoint | Description |
+|--------|---------|-------------|
+| GET | `/api/knowledge/status` | Document/chunk counts and provider info |
+| GET | `/api/knowledge/search?q=...&topK=5` | Direct search (for debugging) |
+| POST | `/api/knowledge/reindex` | Re-run ingestion |
+
+**Static PDF access:** PDFs are served read-only at `/static/knowledge/<filename>.pdf`.
+
+**Sample PDF:** A quickstart guide is included at `apps/server/knowledge/pdfs/agentic-nexus-quickstart.pdf` for demo purposes.
+
+## Tools Registry
+
+All tools use a typed registry with zod validation. Unknown tool names return `{ok: false, code: 'TOOL_NOT_FOUND'}` without crashing. Invalid inputs return `{ok: false, code: 'TOOL_VALIDATION'}` with readable error messages.
+
+**Registered tools:** `webSearch`, `codeInterpreter`, `memory`, `knowledgeSearch`
+
+**Adding a new tool:**
+
+```typescript
+// apps/server/src/tools/myTool.ts
+import { z } from "zod";
+import { registerTool } from "./registry";
+
+registerTool({
+  name: "myTool",
+  description: "What this tool does",
+  inputSchema: z.object({
+    query: z.string().min(1),
+  }),
+  async handler(ctx, input) {
+    const { query } = input as { query: string };
+    // ... implement tool logic
+    return { ok: true, data: result };
+  },
+});
+```
+
+Then import it in `apps/server/src/tools/index.ts` and add a toggle in the Agent Builder frontend.
+
+**Test endpoint:** `POST /api/tools/invoke { name, input }` to test any tool directly.
 
 ## Data Model
 
@@ -188,23 +248,16 @@ model Conversation {
 | PUT    | `/api/agents/:id`       | Update agent             |
 | DELETE | `/api/agents/:id`       | Delete agent             |
 | WS     | `/ws/test?agentId=...`  | Test console streaming   |
+| POST   | `/api/tools/invoke`     | Test tool invocation     |
+| GET    | `/api/tools`            | List registered tools    |
+| GET    | `/api/knowledge/status` | Knowledge base status    |
+| GET    | `/api/knowledge/search` | Search knowledge base    |
+| POST   | `/api/knowledge/reindex`| Re-run PDF ingestion     |
 
 ## How to Add a New Tool
 
-1. Create a new file in `apps/server/src/tools/`:
-
-```typescript
-// apps/server/src/tools/myTool.ts
-export async function myTool(input: string): Promise<string> {
-  // Implement tool logic
-  return `Result for: ${input}`;
-}
-```
-
-2. Register the tool in `apps/server/src/ws.ts`:
-   - Add it to the `availableTools` array with an OpenAI-compatible function schema
-   - Add a handler in the tool execution switch statement
-
+1. Create a new file in `apps/server/src/tools/myTool.ts` using `registerTool()` (see Tools Registry section above)
+2. Import it in `apps/server/src/tools/index.ts`
 3. Add a toggle in the frontend:
    - Update the `AgentTools` type in `apps/client/src/api/agents.ts`
    - Add the tool to `TOOL_OPTIONS` in `apps/client/src/pages/AgentBuilder.tsx`

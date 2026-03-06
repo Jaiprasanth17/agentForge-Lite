@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { registerTool } from "./registry";
+
 const MOCK_RESULTS = [
   {
     title: "Understanding AI Agents - A Comprehensive Guide",
@@ -16,12 +19,27 @@ const MOCK_RESULTS = [
   },
 ];
 
-export async function webSearch(query: string): Promise<{ title: string; url: string; snippet: string }[]> {
+export async function webSearch(query: string, topK: number = 5): Promise<{ title: string; url: string; snippet: string }[]> {
   // Deterministic seeded response based on query length
   const seed = query.length % MOCK_RESULTS.length;
   const results = [];
-  for (let i = 0; i < 3; i++) {
+  const count = Math.min(topK, MOCK_RESULTS.length);
+  for (let i = 0; i < count; i++) {
     results.push(MOCK_RESULTS[(seed + i) % MOCK_RESULTS.length]);
   }
   return results;
 }
+
+registerTool({
+  name: "webSearch",
+  description: "Search the web for information",
+  inputSchema: z.object({
+    query: z.string().min(1),
+    topK: z.number().min(1).max(10).default(5),
+  }),
+  async handler(_ctx, input) {
+    const { query, topK } = input as { query: string; topK: number };
+    const results = await webSearch(query, topK);
+    return { ok: true, data: results };
+  },
+});

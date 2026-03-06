@@ -4,6 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { fetchAgent } from "../api/agents";
 
+interface KnowledgeCitation {
+  text: string;
+  title: string;
+  path: string;
+  score: number;
+  documentId: string;
+  index: number;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
@@ -12,6 +21,11 @@ interface ChatMessage {
   toolName?: string;
   toolCallId?: string;
   pending?: boolean;
+  toolOk?: boolean;
+  toolError?: string;
+  toolCode?: string;
+  toolMs?: number;
+  citations?: KnowledgeCitation[];
 }
 
 interface UsageStats {
@@ -126,17 +140,64 @@ export default function TestConsole() {
           ]);
           break;
 
-        case "tool_result":
+        case "tool_call_result": {
+          // New structured tool result event
+          const citations: KnowledgeCitation[] = [];
+          if (data.ok && data.name === "knowledgeSearch" && data.data?.chunks) {
+            for (const c of data.data.chunks) {
+              citations.push({
+                text: c.text,
+                title: c.title,
+                path: c.path,
+                score: c.score,
+                documentId: c.documentId,
+                index: c.index,
+              });
+            }
+          }
           setMessages((msgs) => [
             ...msgs,
             {
-              id: `result_${data.toolCallId || Date.now()}`,
+              id: `tcr_${data.toolCallId || Date.now()}`,
               role: "tool",
-              content: data.result,
+              content: data.ok
+                ? (data.name === "knowledgeSearch"
+                  ? `Found ${citations.length} citation(s)`
+                  : (typeof data.data === "string" ? data.data : JSON.stringify(data.data, null, 2)))
+                : `Tool failed: ${data.error}${data.code ? ` [${data.code}]` : ""}`,
               timestamp: Date.now(),
-              toolName: data.tool,
+              toolName: data.name,
+              toolCallId: data.toolCallId,
+              toolOk: data.ok,
+              toolError: data.ok ? undefined : data.error,
+              toolCode: data.ok ? undefined : data.code,
+              toolMs: data.ms,
+              citations: citations.length > 0 ? citations : undefined,
             },
           ]);
+          break;
+        }
+
+        case "tool_result":
+          // Legacy tool_result - skip if already handled by tool_call_result
+          setMessages((msgs) => {
+            const alreadyHandled = msgs.some((m) => m.id === `tcr_${data.toolCallId}`);
+            if (alreadyHandled) return msgs;
+            return [
+              ...msgs,
+              {
+                id: `result_${data.toolCallId || Date.now()}`,
+                role: "tool",
+                content: data.result,
+                timestamp: Date.now(),
+                toolName: data.tool,
+              },
+            ];
+          });
+          break;
+
+        case "tool_call_started":
+          // Visual indicator that a tool is starting
           break;
 
         case "tool_rejected":
@@ -411,11 +472,44 @@ export default function TestConsole() {
                 }`}
               >
                 {msg.role === "tool" && (
-                  <div className="text-xs text-accent-light mb-1 font-medium">
-                    🔧 {msg.toolName || "Tool"}
+                  <div className="flex items-center gap-2 text-xs mb-1 font-medium">
+                    <span className={msg.toolOk === false ? "text-danger" : "text-accent-light"}>
+                      🔧 {msg.toolName || "Tool"}
+                    </span>
+                    {msg.toolMs !== undefined && (
+                      <span className="text-dark-500">{msg.toolMs}ms</span>
+                    )}
+                    {msg.toolOk === false && msg.toolCode && (
+                      <span className="text-danger/70 bg-danger/10 px-1.5 py-0.5 rounded text-[10px]">
+                        {msg.toolCode}
+                      </span>
+                    )}
                   </div>
                 )}
                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                {msg.citations && msg.citations.length > 0 && (
+                  <div className="mt-2 space-y-2 border-t border-dark-600 pt-2">
+                    <div className="text-xs text-accent-light font-medium">📚 Citations:</div>
+                    {msg.citations.map((cite, i) => (
+                      <div key={i} className="bg-dark-800 rounded-lg p-2 text-xs">
+                        <div className="flex items-center justify-between mb-1">
+                          <a
+                            href={`/static/knowledge/${cite.path.split("/").pop()}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-accent hover:underline font-medium"
+                          >
+                            {cite.title}
+                          </a>
+                          <span className="text-dark-500">
+                            Score: {(cite.score * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <p className="text-dark-300 line-clamp-3">{cite.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {msg.pending && (
                   <div className="flex gap-2 mt-2">
                     <button

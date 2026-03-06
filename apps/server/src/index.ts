@@ -13,9 +13,14 @@ import { WebSocketServer } from "ws";
 import agentsRouter from "./routes/agents";
 import providersRouter from "./routes/providers";
 import workflowsRouter from "./routes/workflows";
+import knowledgeRouter from "./routes/knowledge";
+import toolsRouter from "./routes/tools";
 import { setupWebSocket } from "./ws";
 import { setupWorkflowWebSocket } from "./wsWorkflow";
 import { initScheduler } from "./scheduler";
+
+// Import tools index to register all tools in the registry
+import "./tools";
 
 const app = express();
 const server = createServer(app);
@@ -30,6 +35,12 @@ app.use(express.json());
 app.use("/api/agents", agentsRouter);
 app.use("/api/providers", providersRouter);
 app.use("/api/workflows", workflowsRouter);
+app.use("/api/knowledge", knowledgeRouter);
+app.use("/api/tools", toolsRouter);
+
+// Serve PDFs read-only from knowledge directory
+const knowledgeDir = process.env.KNOWLEDGE_DIR || path.resolve(__dirname, "../../knowledge");
+app.use("/static/knowledge", express.static(knowledgeDir));
 
 // Health check
 app.get("/api/health", (_req, res) => {

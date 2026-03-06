@@ -206,6 +206,39 @@ export default function WorkflowRunConsole() {
           });
           break;
 
+        case "tool_call_started":
+          setStepStates((prev) => {
+            const newMap = new Map(prev);
+            const existing = newMap.get(data.stepId);
+            if (existing) {
+              newMap.set(data.stepId, {
+                ...existing,
+                chunks: existing.chunks + `\n🔧 Calling ${data.name}...`,
+              });
+            }
+            return newMap;
+          });
+          break;
+
+        case "tool_call_result":
+          setStepStates((prev) => {
+            const newMap = new Map(prev);
+            const existing = newMap.get(data.stepId);
+            if (existing) {
+              const resultText = data.ok
+                ? (data.name === "knowledgeSearch"
+                  ? `📚 Found ${data.data?.chunks?.length || 0} citation(s)`
+                  : `Tool result: ${typeof data.data === "string" ? data.data : JSON.stringify(data.data)}`)
+                : `Tool error: ${data.error}${data.code ? ` [${data.code}]` : ""}`;
+              newMap.set(data.stepId, {
+                ...existing,
+                chunks: existing.chunks + `\n${resultText} (${data.ms || 0}ms)`,
+              });
+            }
+            return newMap;
+          });
+          break;
+
         case "completed":
           setRunStatus("succeeded");
           if (data.usage) setTotalUsage(data.usage);

@@ -1,6 +1,9 @@
 import prisma from "../db/prismaClient";
 import { getProvider } from "../providers";
 import { getWorkflowClients } from "../wsWorkflow";
+import { invokeTool } from "../tools";
+import { knowledgeService } from "../knowledge/service";
+import type { ToolContext } from "../tools/types";
 
 interface StepLogEntry {
   stepId: string;
@@ -95,6 +98,7 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
       let providerName = process.env.LLM_PROVIDER || "mock";
       let model = "mock-advanced";
 
+      let agentTools: Record<string, boolean> = {};
       if (step.agentId) {
         const agent = await prisma.agent.findUnique({ where: { id: step.agentId } });
         if (agent) {
@@ -102,10 +106,49 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
           if (model.startsWith("gpt-") || model.startsWith("o")) providerName = "openai";
           else if (model.startsWith("claude-")) providerName = "anthropic";
           else if (model.startsWith("mock-")) providerName = "mock";
+          agentTools = typeof agent.tools === "string" ? JSON.parse(agent.tools) : (agent.tools as Record<string, boolean>);
         }
       }
 
       const provider = getProvider(providerName);
+      const toolCtx: ToolContext = {
+        logger: console.log,
+        knowledge: knowledgeService,
+        agentId: step.agentId || undefined,
+      };
+
+      // Build available tools list for the provider
+      const availableTools: { type: string; function: { name: string; description: string; parameters: object } }[] = [];
+      if (agentTools.webSearch) {
+        availableTools.push({
+          type: "function",
+          function: {
+            name: "webSearch",
+            description: "Search the web for information",
+            parameters: { type: "object", properties: { query: { type: "string" }, topK: { type: "number" } }, required: ["query"] },
+          },
+        });
+      }
+      if (agentTools.codeInterpreter) {
+        availableTools.push({
+          type: "function",
+          function: {
+            name: "codeInterpreter",
+            description: "Execute code in a sandboxed environment",
+            parameters: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
+          },
+        });
+      }
+      if (agentTools.knowledge) {
+        availableTools.push({
+          type: "function",
+          function: {
+            name: "knowledgeSearch",
+            description: "Search the local PDF knowledge base for relevant information with citations",
+            parameters: { type: "object", properties: { query: { type: "string" }, topK: { type: "number" } }, required: ["query"] },
+          },
+        });
+      }
 
       // Build messages
       const systemMsg = step.instruction + (previousStepOutput
@@ -175,12 +218,47 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
         model,
         system: systemMsg,
         messages,
+        tools: availableTools.length > 0 ? availableTools : undefined,
         temperature: 0.7,
         maxTokens: 2048,
-        onChunk: (chunk) => {
+        onChunk: async (chunk) => {
           if (chunk.text) {
             stepOutput += chunk.text;
             broadcast(runId, { type: "chunk", stepId: step.id, text: chunk.text });
+          }
+          if (chunk.toolCall) {
+            const toolCallId = chunk.toolCall.id || `tc_${Date.now()}`;
+            const toolName: string = chunk.toolCall.name || chunk.toolCall.function?.name || "";
+            const toolArgsRaw: string = chunk.toolCall.arguments || chunk.toolCall.function?.arguments || "{}";
+
+            let toolInput: Record<string, unknown> = {};
+            try {
+              toolInput = JSON.parse(toolArgsRaw);
+            } catch {
+              toolInput = {};
+            }
+
+            broadcast(runId, {
+              type: "tool_call_started",
+              stepId: step.id,
+              toolCallId,
+              name: toolName,
+              input: toolInput,
+            });
+
+            const result = await invokeTool(toolCtx, toolName, toolInput);
+
+            broadcast(runId, {
+              type: "tool_call_result",
+              stepId: step.id,
+              toolCallId,
+              name: toolName,
+              ok: result.ok,
+              data: result.ok ? result.data : undefined,
+              error: result.ok ? undefined : (result as { error: string }).error,
+              code: result.ok ? undefined : (result as { code?: string }).code,
+              ms: (result.meta as Record<string, unknown>)?.ms || 0,
+            });
           }
           if (chunk.done && chunk.usage) {
             stepTokensIn = chunk.usage.tokensIn;

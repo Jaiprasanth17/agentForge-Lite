@@ -71,3 +71,24 @@ model WorkflowRun {
 
   workflow     Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
 }
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String
+  path      String   @unique
+  source    String   // 'pdf'
+  createdAt DateTime @default(now())
+  chunks    Chunk[]
+}
+
+model Chunk {
+  id          String   @id @default(cuid())
+  documentId  String
+  index       Int
+  text        String
+  embedding   Bytes?   // store as blob when using embeddings
+  createdAt   DateTime @default(now())
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, index])
+}
