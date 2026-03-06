@@ -33,8 +33,8 @@ export function setupWebSocket(wss: WebSocketServer): void {
       return;
     }
 
-    const tools = JSON.parse(agent.tools);
-    const parameters = JSON.parse(agent.parameters);
+    const tools = typeof agent.tools === "string" ? JSON.parse(agent.tools) : (agent.tools as Record<string, boolean>);
+    const parameters = typeof agent.parameters === "string" ? JSON.parse(agent.parameters) : (agent.parameters as Record<string, number | string>);
     const conversationMessages: { role: "user" | "assistant" | "system" | "tool"; content: string }[] = [];
     let runWithTools = true;
     let humanInTheLoop = false;
