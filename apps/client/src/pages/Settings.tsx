@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState, useRef, useEffect } from "react";
 import { fetchProviderModels } from "../api/agents";
 import toast from "react-hot-toast";
 
@@ -8,14 +9,113 @@ export default function Settings() {
     queryFn: fetchProviderModels,
   });
 
+  const [brandingImage, setBrandingImage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("branding_image");
+    if (saved) setBrandingImage(saved);
+  }, []);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file (PNG, JPG, SVG, etc.)");
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Image must be under 2MB");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      localStorage.setItem("branding_image", dataUrl);
+      setBrandingImage(dataUrl);
+      window.dispatchEvent(new Event("branding_updated"));
+      toast.success("Branding image updated");
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveBranding = () => {
+    localStorage.removeItem("branding_image");
+    setBrandingImage(null);
+    window.dispatchEvent(new Event("branding_updated"));
+    toast.success("Branding image removed");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   return (
     <div className="p-8 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold text-dark-100 mb-2">Settings</h1>
       <p className="text-sm text-dark-400 mb-8">
-        Configure provider API keys and view available models
+        Configure branding, provider API keys, and view available models
       </p>
 
       <div className="space-y-6">
+        {/* Branding Image Upload */}
+        <div className="card">
+          <h2 className="text-lg font-semibold text-dark-200 mb-2">Branding</h2>
+          <p className="text-sm text-dark-400 mb-4">
+            Upload a logo or branding image. It will appear above the app name in the sidebar.
+          </p>
+
+          <div className="flex items-start gap-6">
+            {/* Preview */}
+            <div className="w-40 h-24 rounded-lg border-2 border-dashed border-dark-600 flex items-center justify-center bg-dark-800 shrink-0 overflow-hidden">
+              {brandingImage ? (
+                <img
+                  src={brandingImage}
+                  alt="Branding preview"
+                  className="max-h-full max-w-full object-contain"
+                />
+              ) : (
+                <div className="text-center">
+                  <svg className="w-8 h-8 mx-auto text-dark-500 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+                  </svg>
+                  <span className="text-xs text-dark-500">No image</span>
+                </div>
+              )}
+            </div>
+
+            {/* Controls */}
+            <div className="flex-1 space-y-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleImageUpload}
+                className="hidden"
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="btn-primary text-sm px-4 py-2"
+                >
+                  {brandingImage ? "Change Image" : "Upload Image"}
+                </button>
+                {brandingImage && (
+                  <button
+                    onClick={handleRemoveBranding}
+                    className="btn-secondary text-sm px-4 py-2 text-red-400 border-red-400/30 hover:bg-red-400/10"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-dark-500">
+                Supported: PNG, JPG, SVG. Max 2MB. Recommended: 200x60px or similar aspect ratio.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Provider Keys */}
         <div className="card">
           <h2 className="text-lg font-semibold text-dark-200 mb-4">Provider API Keys</h2>

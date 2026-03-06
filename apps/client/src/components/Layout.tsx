@@ -1,4 +1,5 @@
 import { Outlet, NavLink } from "react-router-dom";
+import { useEffect, useState } from "react";
 
 const navItems = [
   { to: "/", label: "Home", icon: HomeIcon },
@@ -8,13 +9,36 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const [brandingImage, setBrandingImage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("branding_image");
+    if (saved) setBrandingImage(saved);
+
+    const handler = () => {
+      const img = localStorage.getItem("branding_image");
+      setBrandingImage(img);
+    };
+    window.addEventListener("branding_updated", handler);
+    return () => window.removeEventListener("branding_updated", handler);
+  }, []);
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Left Sidebar */}
       <aside className="w-64 bg-dark-900 border-r border-dark-700 flex flex-col shrink-0">
         <div className="p-4 border-b border-dark-700">
+          {brandingImage && (
+            <div className="mb-3 flex justify-center">
+              <img
+                src={brandingImage}
+                alt="Branding"
+                className="max-h-16 max-w-full object-contain"
+              />
+            </div>
+          )}
           <h1 className="text-xl font-bold bg-gradient-to-r from-accent-light to-purple-400 bg-clip-text text-transparent">
-            AgentForge Lite
+            Agentic Nexus
           </h1>
           <p className="text-xs text-dark-400 mt-1">AI Agent Builder</p>
         </div>

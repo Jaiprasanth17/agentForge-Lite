@@ -30,8 +30,8 @@ app.get("/api/health", (_req, res) => {
 setupWebSocket(server);
 
 server.listen(PORT, () => {
-  console.log(`[AgentForge Server] Running on http://localhost:${PORT}`);
-  console.log(`[AgentForge Server] WebSocket at ws://localhost:${PORT}/ws/test`);
+  console.log(`[Agentic Nexus Server] Running on http://localhost:${PORT}`);
+  console.log(`[Agentic Nexus Server] WebSocket at ws://localhost:${PORT}/ws/test`);
 });
 
 export default app;

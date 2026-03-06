@@ -1,4 +1,4 @@
-# AgentForge Lite
+# Agentic Nexus
 
 A full-stack application for designing, configuring, and testing AI agents with an intuitive visual builder.
 
@@ -6,7 +6,7 @@ A full-stack application for designing, configuring, and testing AI agents with 
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    AgentForge Lite                       │
+│                    Agentic Nexus                         │
 ├─────────────────────┬───────────────────────────────────┤
 │   Client (React)    │         Server (Express)          │
 │                     │                                   │
