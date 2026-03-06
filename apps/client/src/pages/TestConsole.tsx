@@ -53,16 +53,20 @@ export default function TestConsole() {
   useEffect(() => {
     if (!id) return;
 
+    let cancelled = false;
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws/test?agentId=${id}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (cancelled) return;
       setIsConnected(true);
     };
 
     ws.onmessage = (event) => {
+      if (cancelled) return;
       const data = JSON.parse(event.data);
 
       switch (data.type) {
@@ -161,15 +165,18 @@ export default function TestConsole() {
     };
 
     ws.onclose = () => {
+      if (cancelled) return;
       setIsConnected(false);
     };
 
     ws.onerror = () => {
+      if (cancelled) return;
       toast.error("WebSocket connection failed");
       setIsConnected(false);
     };
 
     return () => {
+      cancelled = true;
       ws.close();
     };
   }, [id]);

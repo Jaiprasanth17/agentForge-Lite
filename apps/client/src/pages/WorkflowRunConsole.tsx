@@ -91,6 +91,8 @@ export default function WorkflowRunConsole() {
   useEffect(() => {
     if (!runId) return;
 
+    let cancelled = false;
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws/workflow?runId=${runId}`;
     const ws = new WebSocket(wsUrl);
@@ -98,10 +100,12 @@ export default function WorkflowRunConsole() {
     startTimeRef.current = Date.now();
 
     ws.onopen = () => {
+      if (cancelled) return;
       setIsConnected(true);
     };
 
     ws.onmessage = (event) => {
+      if (cancelled) return;
       const data = JSON.parse(event.data);
 
       switch (data.type) {
@@ -221,15 +225,18 @@ export default function WorkflowRunConsole() {
     };
 
     ws.onclose = () => {
+      if (cancelled) return;
       setIsConnected(false);
     };
 
     ws.onerror = () => {
+      if (cancelled) return;
       toast.error("WebSocket connection failed");
       setIsConnected(false);
     };
 
     return () => {
+      cancelled = true;
       ws.close();
     };
   }, [runId]);
