@@ -21,7 +21,7 @@ export default function Home() {
       <div className="relative z-10 text-center max-w-2xl px-6">
         {/* Animated Character */}
         <div
-          className="w-64 h-64 mx-auto mb-8 cursor-pointer relative"
+          className="w-96 h-48 mx-auto mb-8 cursor-pointer relative"
           onClick={() => setShowTooltip(!showTooltip)}
         >
           <Lottie
