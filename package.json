@@ -16,6 +16,10 @@
     "test": "npm run test -w apps/server && npm run test -w apps/client"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "prisma": "^7.4.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.4.2"
   }
 }
