@@ -1,0 +1,25 @@
+WEBVTT
+
+00:00.000 --> 00:01.500
+Step 1: Create an Agent
+
+00:01.500 --> 00:03.000
+Define name, model, system instructions, tools, and parameters.
+
+00:03.000 --> 00:04.500
+Step 2: Test the Agent
+
+00:04.500 --> 00:06.000
+Stream responses, approve tool calls with human-in-the-loop.
+
+00:06.000 --> 00:07.500
+Step 3: Create a Workflow
+
+00:07.500 --> 00:09.000
+Add ordered steps, attach agents, enable approvals.
+
+00:09.000 --> 00:10.500
+Step 4: Run & Monitor
+
+00:10.500 --> 00:12.000
+Review streaming logs, approvals, final status and usage.

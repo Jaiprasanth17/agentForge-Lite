@@ -137,6 +137,20 @@ JWT_SECRET=dev-secret   # JWT signing secret (auth scaffold)
 - Dynamic model picker from each provider adapter
 - Environment information display
 
+### Help & Onboarding Page
+- Animated explainer with Lottie (JSON vector animation) showing the end-to-end workflow
+- MP4 fallback support for browsers without Lottie
+- 6-step "How It Works" guide with icons, descriptions, and action links
+- FAQ accordion (5 items) with expand/collapse
+- CTA buttons: Create Agent, Create Workflow, Open Docs
+- Accessibility: reduced motion support, VTT captions, keyboard controls
+- Analytics event tracking (console in dev, abstractable for production)
+- All copy centralized in `help.copy.ts` for easy editing and i18n
+
+**To customize the animation:** Replace `apps/client/src/assets/help/agentic_explainer.json` with your brand-approved Lottie JSON file (800×400px recommended, <1.2 MB).
+
+**To edit FAQ/steps:** Update `apps/client/src/components/help/help.copy.ts`.
+
 ## Data Model
 
 ```prisma

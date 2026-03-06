@@ -8,6 +8,7 @@ import Settings from "./pages/Settings";
 import WorkflowsList from "./pages/WorkflowsList";
 import WorkflowBuilder from "./pages/WorkflowBuilder";
 import WorkflowRunConsole from "./pages/WorkflowRunConsole";
+import Help from "./pages/Help";
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="workflows/:id" element={<WorkflowBuilder />} />
         <Route path="workflows/:id/run/:runId" element={<WorkflowRunConsole />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="help" element={<Help />} />
       </Route>
     </Routes>
   );
