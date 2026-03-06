@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdf = require("pdf-parse");
+import { execSync } from "child_process";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -20,26 +19,58 @@ function chunkText(text: string, chunkSize: number, overlap: number): string[] {
     if (chunk.length > 0) {
       chunks.push(chunk);
     }
-    start = end - overlap;
-    if (start >= text.length) break;
+    // If we reached the end of the text, stop
+    if (end >= text.length) break;
+    // Advance start; ensure it always moves forward to avoid infinite loop
+    const nextStart = end - overlap;
+    start = nextStart > start ? nextStart : start + chunkSize;
   }
   return chunks;
 }
 
+/**
+ * Extract text from a PDF by spawning a standalone Node subprocess.
+ * Uses pdf-extract.cjs helper to avoid tsx module resolution issues with pdf-parse.
+ */
+function extractPdfText(filePath: string): string {
+  const absPath = path.resolve(filePath);
+  const extractScript = path.resolve(__dirname, "pdf-extract.cjs");
+  const serverRoot = path.resolve(__dirname, "../..");
+  const result = execSync(
+    `node --max-old-space-size=256 ${JSON.stringify(extractScript)} ${JSON.stringify(absPath)}`,
+    {
+      timeout: 15000,
+      maxBuffer: 10 * 1024 * 1024,
+      cwd: serverRoot,
+    }
+  );
+  return result.toString("utf-8");
+}
+
 async function ingest(): Promise<void> {
-  console.log(`[Knowledge Ingest] Scanning ${PDF_DIR} for PDFs...`);
+  console.log(`[Knowledge Ingest] Scanning ${PDF_DIR} for documents...`);
 
   if (!fs.existsSync(PDF_DIR)) {
-    console.log(`[Knowledge Ingest] PDF directory not found: ${PDF_DIR}`);
-    console.log("[Knowledge Ingest] Create it and add PDFs, then run again.");
+    console.log(`[Knowledge Ingest] Directory not found: ${PDF_DIR}`);
+    console.log("[Knowledge Ingest] Create it and add PDFs/TXT files, then run again.");
     return;
   }
 
-  const files = fs.readdirSync(PDF_DIR).filter((f) => f.toLowerCase().endsWith(".pdf"));
-  console.log(`[Knowledge Ingest] Found ${files.length} PDF file(s)`);
+  // Sort: .txt files first (reliable), then .pdf files (may need pdf-parse subprocess)
+  const files = fs.readdirSync(PDF_DIR)
+    .filter((f) => {
+      const lower = f.toLowerCase();
+      return lower.endsWith(".pdf") || lower.endsWith(".txt");
+    })
+    .sort((a, b) => {
+      const aIsTxt = a.toLowerCase().endsWith(".txt") ? 0 : 1;
+      const bIsTxt = b.toLowerCase().endsWith(".txt") ? 0 : 1;
+      return aIsTxt - bIsTxt;
+    });
+  console.log(`[Knowledge Ingest] Found ${files.length} file(s)`);
 
   if (files.length === 0) {
-    console.log("[Knowledge Ingest] No PDFs found. Add PDFs to the knowledge/pdfs directory.");
+    console.log("[Knowledge Ingest] No files found. Add PDFs or TXT files to the knowledge/pdfs directory.");
     return;
   }
 
@@ -49,7 +80,6 @@ async function ingest(): Promise<void> {
     const filePath = path.join(PDF_DIR, file);
     const relativePath = `knowledge/pdfs/${file}`;
 
-    // Check if already ingested
     const existing = await prisma.document.findUnique({
       where: { path: relativePath },
     });
@@ -62,9 +92,13 @@ async function ingest(): Promise<void> {
     console.log(`[Knowledge Ingest] Processing: ${file}`);
 
     try {
-      const dataBuffer = fs.readFileSync(filePath);
-      const pdfData = await pdf(dataBuffer);
-      const text = pdfData.text;
+      let text: string;
+
+      if (file.toLowerCase().endsWith(".txt")) {
+        text = fs.readFileSync(filePath, "utf-8");
+      } else {
+        text = extractPdfText(filePath);
+      }
 
       if (!text || text.trim().length === 0) {
         console.log(`[Knowledge Ingest] Warning: ${file} has no extractable text, skipping`);
@@ -74,13 +108,12 @@ async function ingest(): Promise<void> {
       const chunks = chunkText(text, CHUNK_SIZE, CHUNK_OVERLAP);
       console.log(`[Knowledge Ingest]   -> ${chunks.length} chunks (${text.length} chars)`);
 
-      // Create document and chunks in a transaction
       await prisma.$transaction(async (tx) => {
         const doc = await tx.document.create({
           data: {
-            title: file.replace(/\.pdf$/i, ""),
+            title: file.replace(/\.(pdf|txt)$/i, ""),
             path: relativePath,
-            source: "pdf",
+            source: file.toLowerCase().endsWith(".pdf") ? "pdf" : "txt",
           },
         });
 
@@ -102,9 +135,9 @@ async function ingest(): Promise<void> {
   }
 
   console.log(`[Knowledge Ingest] Done. Ingested ${totalChunks} new chunks.`);
-  const status = await prisma.document.count();
+  const docCount = await prisma.document.count();
   const chunkCount = await prisma.chunk.count();
-  console.log(`[Knowledge Ingest] Total: ${status} documents, ${chunkCount} chunks`);
+  console.log(`[Knowledge Ingest] Total: ${docCount} documents, ${chunkCount} chunks`);
 }
 
 ingest()
