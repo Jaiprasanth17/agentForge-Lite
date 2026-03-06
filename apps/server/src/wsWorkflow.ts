@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { Server } from "http";
 import { URL } from "url";
+import { IncomingMessage } from "http";
 import { handleApproval, handleCancel } from "./orchestrator/workflowRunner";
 
 interface WSWorkflowMessage {
@@ -17,10 +17,8 @@ export function getWorkflowClients(runId: string): Set<WebSocket> {
   return runClients.get(runId) || new Set();
 }
 
-export function setupWorkflowWebSocket(server: Server): void {
-  const wss = new WebSocketServer({ server, path: "/ws/workflow" });
-
-  wss.on("connection", (ws: WebSocket, req) => {
+export function setupWorkflowWebSocket(wss: WebSocketServer): void {
+  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const runId = url.searchParams.get("runId");
 

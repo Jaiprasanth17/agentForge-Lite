@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { Server } from "http";
 import { URL } from "url";
+import { IncomingMessage } from "http";
 import prisma from "./db/prismaClient";
 import { getProvider } from "./providers";
 import { webSearch } from "./tools/webSearch";
@@ -15,10 +15,8 @@ interface WSMessage {
   humanInTheLoop?: boolean;
 }
 
-export function setupWebSocket(server: Server): void {
-  const wss = new WebSocketServer({ server, path: "/ws/test" });
-
-  wss.on("connection", async (ws: WebSocket, req) => {
+export function setupWebSocket(wss: WebSocketServer): void {
+  wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const agentId = url.searchParams.get("agentId");
 

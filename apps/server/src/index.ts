@@ -4,6 +4,7 @@ dotenv.config({ path: "../../.env" });
 import express from "express";
 import cors from "cors";
 import { createServer } from "http";
+import { WebSocketServer } from "ws";
 import agentsRouter from "./routes/agents";
 import providersRouter from "./routes/providers";
 import workflowsRouter from "./routes/workflows";
@@ -30,9 +31,28 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// WebSocket
-setupWebSocket(server);
-setupWorkflowWebSocket(server);
+// WebSocket - use noServer mode to handle multiple paths
+const testWss = new WebSocketServer({ noServer: true });
+const workflowWss = new WebSocketServer({ noServer: true });
+
+setupWebSocket(testWss);
+setupWorkflowWebSocket(workflowWss);
+
+server.on("upgrade", (request, socket, head) => {
+  const pathname = request.url?.split("?")[0];
+
+  if (pathname === "/ws/test") {
+    testWss.handleUpgrade(request, socket, head, (ws) => {
+      testWss.emit("connection", ws, request);
+    });
+  } else if (pathname === "/ws/workflow") {
+    workflowWss.handleUpgrade(request, socket, head, (ws) => {
+      workflowWss.emit("connection", ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
 
 // Initialize scheduler for cron-triggered workflows
 initScheduler().catch((err) => {
