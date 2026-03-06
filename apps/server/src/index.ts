@@ -1,5 +1,10 @@
 import dotenv from "dotenv";
-dotenv.config({ path: "../../.env" });
+import path from "path";
+// Load .env from project root (works regardless of cwd)
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
+// Also try loading from server directory and cwd as fallbacks
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
+dotenv.config();
 
 import express from "express";
 import cors from "cors";

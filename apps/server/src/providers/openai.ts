@@ -2,10 +2,9 @@ import { LLMProvider, ProviderResponseChunk } from "./types";
 
 export class OpenAIProvider implements LLMProvider {
   name = "openai";
-  private apiKey: string;
 
-  constructor() {
-    this.apiKey = process.env.OPENAI_API_KEY || "";
+  private get apiKey(): string {
+    return process.env.OPENAI_API_KEY || "";
   }
 
   async listModels(): Promise<string[]> {
