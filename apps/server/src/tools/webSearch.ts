@@ -1,45 +1,13 @@
-import { z } from "zod";
-import { registerTool } from "./registry";
+/**
+ * Web Search Tools
+ *
+ * This module now delegates to the web_search/ module which provides:
+ * - search_web: Real web search via DuckDuckGo with result ranking
+ * - click: Fetch and extract webpage content
+ *
+ * The old mock webSearch tool has been replaced.
+ * Import "./web_search" to register the new tools.
+ */
 
-const MOCK_RESULTS = [
-  {
-    title: "Understanding AI Agents - A Comprehensive Guide",
-    url: "https://example.com/ai-agents-guide",
-    snippet: "AI agents are autonomous systems that can perceive their environment, make decisions, and take actions to achieve specific goals.",
-  },
-  {
-    title: "Building Production-Ready LLM Applications",
-    url: "https://example.com/llm-apps",
-    snippet: "Learn how to build scalable and reliable applications powered by large language models with best practices for deployment.",
-  },
-  {
-    title: "The Future of Conversational AI",
-    url: "https://example.com/conversational-ai",
-    snippet: "Conversational AI is evolving rapidly with advances in natural language understanding, context management, and multi-turn dialogue.",
-  },
-];
-
-export async function webSearch(query: string, topK: number = 5): Promise<{ title: string; url: string; snippet: string }[]> {
-  // Deterministic seeded response based on query length
-  const seed = query.length % MOCK_RESULTS.length;
-  const results = [];
-  const count = Math.min(topK, MOCK_RESULTS.length);
-  for (let i = 0; i < count; i++) {
-    results.push(MOCK_RESULTS[(seed + i) % MOCK_RESULTS.length]);
-  }
-  return results;
-}
-
-registerTool({
-  name: "webSearch",
-  description: "Search the web for information",
-  inputSchema: z.object({
-    query: z.string().min(1),
-    topK: z.number().min(1).max(10).default(5),
-  }),
-  async handler(_ctx, input) {
-    const { query, topK } = input as { query: string; topK: number };
-    const results = await webSearch(query, topK);
-    return { ok: true, data: results };
-  },
-});
+// Re-export from the new web_search module for backward compatibility
+export { searchWeb, clickUrl, compressSources, formatWithCitations } from "./web_search";

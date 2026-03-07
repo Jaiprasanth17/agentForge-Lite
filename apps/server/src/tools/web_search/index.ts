@@ -1,0 +1,139 @@
+/**
+ * Web Search Module - Entry point
+ *
+ * Registers two tools:
+ * 1. search_web - Performs web search queries, returns top 5 SERP results
+ * 2. click - Fetches and extracts content from a specific URL
+ *
+ * Also exports the query rewrite agent and compression utilities.
+ */
+
+import { z } from "zod";
+import { registerTool } from "../registry";
+import { searchWeb } from "./search_web";
+import { clickUrl } from "./click";
+import { compressText, compressSources, formatWithCitations } from "./compress";
+import { filterTopResults } from "./scorer";
+import { rewriteQuery, shouldSearch } from "./queryRewrite";
+import { estimateTokens, MAX_SEARCH_CONTENT_TOKENS } from "./utils";
+import type { SerpResult } from "./cache";
+
+// ---------------------------------------------------------------------------
+// search_web tool registration
+// ---------------------------------------------------------------------------
+
+registerTool({
+  name: "search_web",
+  description:
+    "Search the web for information. Use when user asks for current events, facts beyond model knowledge, or when unsure.",
+  inputSchema: z.object({
+    queries: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(5)
+      .describe("List of focused search queries"),
+  }),
+  async handler(_ctx, input) {
+    const { queries } = input as { queries: string[] };
+
+    try {
+      const results = await searchWeb(queries);
+
+      if (results.length === 0) {
+        return {
+          ok: true,
+          data: {
+            results: [],
+            count: 0,
+            message: "No results found. Try different search terms.",
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        data: {
+          results: results.map((r: SerpResult, i: number) => ({
+            id: `serp_${i}`,
+            title: r.title,
+            url: r.url,
+            snippet: r.snippet,
+          })),
+          count: results.length,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Search failed";
+      return {
+        ok: false,
+        error: `Web search failed: ${message}`,
+        code: "SEARCH_FAILED",
+      };
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// click tool registration
+// ---------------------------------------------------------------------------
+
+registerTool({
+  name: "click",
+  description:
+    "Open a specific search result and return the content of the webpage.",
+  inputSchema: z.object({
+    id: z
+      .string()
+      .min(1)
+      .describe("SERP result identifier or URL"),
+  }),
+  async handler(_ctx, input) {
+    const { id } = input as { id: string };
+
+    try {
+      const result = await clickUrl(id);
+
+      // Compress content to stay within token budget
+      const compressed = compressText(result.content, 200);
+      const tokens = estimateTokens(compressed);
+
+      return {
+        ok: true,
+        data: {
+          url: result.url,
+          title: result.title,
+          content: compressed,
+          tokens,
+          fromCache: result.fromCache,
+        },
+        meta: {
+          originalLength: result.content.length,
+          compressedTokens: tokens,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Click failed";
+      return {
+        ok: false,
+        error: `Failed to fetch page: ${message}`,
+        code: "CLICK_FAILED",
+      };
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Exports for use by WS handler and workflow runner
+// ---------------------------------------------------------------------------
+
+export { searchWeb } from "./search_web";
+export { clickUrl } from "./click";
+export { compressText, compressSources, formatWithCitations } from "./compress";
+export { filterTopResults, rankResults } from "./scorer";
+export { rewriteQuery, shouldSearch } from "./queryRewrite";
+export { extractMainContent, extractTextFromHtml, extractTitle } from "./extract";
+export { estimateTokens, MAX_SEARCH_CONTENT_TOKENS, MAX_TOKENS_PER_SOURCE, MAX_SERP_RESULTS, MAX_CLICK_RESULTS } from "./utils";
+export { serpCache, pageCache } from "./cache";
+export type { SerpResult } from "./cache";
+export type { ClickResult } from "./click";
+export type { RewrittenQueries } from "./queryRewrite";

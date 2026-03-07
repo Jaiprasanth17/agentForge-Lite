@@ -9,6 +9,7 @@ import { knowledgeService } from "./knowledge/service";
 import type { ToolContext } from "./tools/types";
 import { applyTokenBudget, logBudgetDecision, compressRetrievalChunks } from "./lib/tokenBudget";
 import type { ChatMessage, ToolSchema } from "./lib/tokenBudget";
+import { shouldSearch } from "./tools/web_search/queryRewrite";
 
 interface WSMessage {
   type: string;
@@ -142,9 +143,17 @@ export function setupWebSocket(wss: WebSocketServer): void {
             availableTools.push({
               type: "function",
               function: {
-                name: "webSearch",
-                description: "Search the web for information",
-                parameters: { type: "object", properties: { query: { type: "string", description: "Search query" }, topK: { type: "number", description: "Number of results" } }, required: ["query"] },
+                name: "search_web",
+                description: "Search the web for information. Use when user asks for current events, facts beyond model knowledge, or when unsure.",
+                parameters: { type: "object", properties: { queries: { type: "array", items: { type: "string" }, description: "List of focused search queries" } }, required: ["queries"] },
+              },
+            });
+            availableTools.push({
+              type: "function",
+              function: {
+                name: "click",
+                description: "Open a specific search result and return the content of the webpage.",
+                parameters: { type: "object", properties: { id: { type: "string", description: "SERP result identifier or URL" } }, required: ["id"] },
               },
             });
           }
@@ -180,10 +189,17 @@ export function setupWebSocket(wss: WebSocketServer): void {
           }
         }
 
+        // Enhance system prompt with search reasoning policy when web search is enabled
+        let systemPrompt = agent.system || undefined;
+        if (tools.webSearch && runWithTools) {
+          const searchPolicy = `\n\nWhen you have search_web and click tools available:\n- Call search_web when: user asks for latest info, factual verification, you are uncertain, knowledge cutoff is exceeded, dates after 2024-10, or content relates to news/releases/APIs/libraries.\n- Do NOT call search_web for: purely conceptual tasks, coding problems without external dependencies, or internal document questions.\n- After searching, use click on 1-3 top results from official docs, credible news, government, or academic sources. Avoid SEO spam and AI-generated sites.\n- Compress and cite all sources. Format your final answer as:\n\n## Answer\n(Your synthesis with inline citations like "According to Source Title (URL)")\n\n## Sources\n- Title (URL)\n- Title (URL)\n\n- Surface any conflicts between sources.\n- Never hallucinate URLs or facts not found in search results.`;
+          systemPrompt = (systemPrompt || "") + searchPolicy;
+        }
+
         // Apply token budget to prevent context_length_exceeded
         const budgeted = applyTokenBudget(
           agent.model,
-          agent.system || undefined,
+          systemPrompt,
           conversationMessages as ChatMessage[],
           availableTools.length > 0 ? availableTools : undefined,
           parameters.maxTokens as number | undefined

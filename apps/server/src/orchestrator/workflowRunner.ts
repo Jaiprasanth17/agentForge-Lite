@@ -125,9 +125,17 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
         availableTools.push({
           type: "function",
           function: {
-            name: "webSearch",
-            description: "Search the web for information",
-            parameters: { type: "object", properties: { query: { type: "string" }, topK: { type: "number" } }, required: ["query"] },
+            name: "search_web",
+            description: "Search the web for information. Use when user asks for current events, facts beyond model knowledge, or when unsure.",
+            parameters: { type: "object", properties: { queries: { type: "array", items: { type: "string" }, description: "List of focused search queries" } }, required: ["queries"] },
+          },
+        });
+        availableTools.push({
+          type: "function",
+          function: {
+            name: "click",
+            description: "Open a specific search result and return the content of the webpage.",
+            parameters: { type: "object", properties: { id: { type: "string", description: "SERP result identifier or URL" } }, required: ["id"] },
           },
         });
       }

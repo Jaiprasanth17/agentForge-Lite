@@ -1,5 +1,5 @@
 // Import all tool modules to trigger registration via registerTool()
-import "./webSearch";
+import "./web_search"; // Registers search_web and click tools
 import "./codeInterpreter";
 import "./memory";
 import "./knowledgeSearch";
