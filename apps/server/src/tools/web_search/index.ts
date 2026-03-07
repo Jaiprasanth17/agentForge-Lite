@@ -17,6 +17,7 @@ import { filterTopResults } from "./scorer";
 import { rewriteQuery, shouldSearch } from "./queryRewrite";
 import { estimateTokens, MAX_SEARCH_CONTENT_TOKENS } from "./utils";
 import type { SerpResult } from "./cache";
+import { lastSerpResults } from "./cache";
 
 // ---------------------------------------------------------------------------
 // search_web tool registration
@@ -50,15 +51,18 @@ registerTool({
         };
       }
 
+      // Store results so click tool can resolve serp_X IDs
+      lastSerpResults.clear();
+      const mapped = results.map((r: SerpResult, i: number) => {
+        const id = `serp_${i}`;
+        lastSerpResults.set(id, { url: r.url, title: r.title });
+        return { id, title: r.title, url: r.url, snippet: r.snippet };
+      });
+
       return {
         ok: true,
         data: {
-          results: results.map((r: SerpResult, i: number) => ({
-            id: `serp_${i}`,
-            title: r.title,
-            url: r.url,
-            snippet: r.snippet,
-          })),
+          results: mapped,
           count: results.length,
         },
       };
@@ -90,8 +94,25 @@ registerTool({
   async handler(_ctx, input) {
     const { id } = input as { id: string };
 
+    // Resolve serp_X ID to actual URL
+    let url = id;
+    let serpTitle = "";
+    if (id.startsWith("serp_")) {
+      const stored = lastSerpResults.get(id);
+      if (stored) {
+        url = stored.url;
+        serpTitle = stored.title;
+      } else {
+        return {
+          ok: false,
+          error: `Unknown result ID: ${id}. Run search_web first to get result IDs.`,
+          code: "INVALID_ID",
+        };
+      }
+    }
+
     try {
-      const result = await clickUrl(id);
+      const result = await clickUrl(url);
 
       // Compress content to stay within token budget
       const compressed = compressText(result.content, 200);
@@ -100,8 +121,8 @@ registerTool({
       return {
         ok: true,
         data: {
-          url: result.url,
-          title: result.title,
+          url: url,
+          title: result.title || serpTitle,
           content: compressed,
           tokens,
           fromCache: result.fromCache,

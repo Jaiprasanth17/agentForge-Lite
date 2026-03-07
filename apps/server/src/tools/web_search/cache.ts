@@ -61,6 +61,12 @@ export class SearchCache<T = unknown> {
 export const serpCache = new SearchCache<SerpResult[]>(50, 10 * 60 * 1000); // 10 min TTL
 export const pageCache = new SearchCache<string>(30, 5 * 60 * 1000); // 5 min TTL
 
+/**
+ * In-memory store for the last search results so click can resolve serp_X IDs to URLs.
+ * Maps serp_0, serp_1, ... to { url, title }.
+ */
+export const lastSerpResults = new Map<string, { url: string; title: string }>();
+
 export interface SerpResult {
   id: string;
   title: string;
