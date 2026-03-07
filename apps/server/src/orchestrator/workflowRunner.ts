@@ -4,6 +4,8 @@ import { getWorkflowClients } from "../wsWorkflow";
 import { invokeTool } from "../tools";
 import { knowledgeService } from "../knowledge/service";
 import type { ToolContext } from "../tools/types";
+import { applyTokenBudget, logBudgetDecision } from "../lib/tokenBudget";
+import type { ChatMessage, ToolSchema } from "../lib/tokenBudget";
 
 interface StepLogEntry {
   stepId: string;
@@ -118,7 +120,7 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
       };
 
       // Build available tools list for the provider
-      const availableTools: { type: string; function: { name: string; description: string; parameters: object } }[] = [];
+      const availableTools: ToolSchema[] = [];
       if (agentTools.webSearch) {
         availableTools.push({
           type: "function",
@@ -155,7 +157,7 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
         ? `\n\nContext from previous step:\n${previousStepOutput}`
         : "");
 
-      const messages: { role: "user" | "assistant" | "system" | "tool"; content: string }[] = [
+      const messages: ChatMessage[] = [
         { role: "user", content: previousStepOutput || "Execute this step." },
       ];
 
@@ -209,6 +211,29 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
       entry.status = "running";
       broadcast(runId, { type: "step_executing", stepId: step.id });
 
+      // Apply token budget to prevent context_length_exceeded
+      const budgeted = applyTokenBudget(
+        model,
+        systemMsg,
+        messages,
+        availableTools.length > 0 ? availableTools : undefined,
+        2048
+      );
+      logBudgetDecision(budgeted.decision, console.log);
+
+      // Notify clients if budget was applied
+      if (budgeted.decision.applied) {
+        broadcast(runId, {
+          type: "token_budget",
+          stepId: step.id,
+          action: budgeted.decision.action,
+          estimatedBefore: budgeted.decision.estimatedBefore,
+          estimatedAfter: budgeted.decision.estimatedAfter,
+          effectiveMaxTokens: budgeted.decision.effectiveMaxTokens,
+          briefMode: budgeted.decision.briefMode,
+        });
+      }
+
       // Generate response
       let stepOutput = "";
       let stepTokensIn = 0;
@@ -216,11 +241,11 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
 
       await provider.generate({
         model,
-        system: systemMsg,
-        messages,
-        tools: availableTools.length > 0 ? availableTools : undefined,
+        system: budgeted.system,
+        messages: budgeted.messages,
+        tools: budgeted.tools,
         temperature: 0.7,
-        maxTokens: 2048,
+        maxTokens: budgeted.maxTokens,
         onChunk: async (chunk) => {
           if (chunk.text) {
             stepOutput += chunk.text;

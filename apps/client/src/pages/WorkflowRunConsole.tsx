@@ -239,6 +239,24 @@ export default function WorkflowRunConsole() {
           });
           break;
 
+        case "token_budget":
+          // Token budget was applied to prevent context_length_exceeded
+          setStepStates((prev) => {
+            const newMap = new Map(prev);
+            const existing = data.stepId ? newMap.get(data.stepId) : undefined;
+            if (existing) {
+              const budgetMsg = data.briefMode
+                ? `\n⚡ Brief mode: context compressed (${data.estimatedBefore}→${data.estimatedAfter} tokens, max_tokens=${data.effectiveMaxTokens})`
+                : `\n📊 Token budget: ${data.action} (${data.estimatedBefore}→${data.estimatedAfter} tokens)`;
+              newMap.set(data.stepId, {
+                ...existing,
+                chunks: existing.chunks + budgetMsg,
+              });
+            }
+            return newMap;
+          });
+          break;
+
         case "completed":
           setRunStatus("succeeded");
           if (data.usage) setTotalUsage(data.usage);

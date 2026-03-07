@@ -7,6 +7,8 @@ import { invokeTool } from "./tools";
 import { storeMemory } from "./tools/memory";
 import { knowledgeService } from "./knowledge/service";
 import type { ToolContext } from "./tools/types";
+import { applyTokenBudget, logBudgetDecision, compressRetrievalChunks } from "./lib/tokenBudget";
+import type { ChatMessage, ToolSchema } from "./lib/tokenBudget";
 
 interface WSMessage {
   type: string;
@@ -118,7 +120,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
         const provider = getProvider(providerName);
 
         // Build available tools list for the provider
-        const availableTools: { type: string; function: { name: string; description: string; parameters: object } }[] = [];
+        const availableTools: ToolSchema[] = [];
         if (runWithTools) {
           if (tools.webSearch) {
             availableTools.push({
@@ -152,13 +154,35 @@ export function setupWebSocket(wss: WebSocketServer): void {
           }
         }
 
+        // Apply token budget to prevent context_length_exceeded
+        const budgeted = applyTokenBudget(
+          agent.model,
+          agent.system || undefined,
+          conversationMessages as ChatMessage[],
+          availableTools.length > 0 ? availableTools : undefined,
+          parameters.maxTokens as number | undefined
+        );
+        logBudgetDecision(budgeted.decision, console.log);
+
+        // Notify client if budget was applied
+        if (budgeted.decision.applied) {
+          ws.send(JSON.stringify({
+            type: "token_budget",
+            action: budgeted.decision.action,
+            estimatedBefore: budgeted.decision.estimatedBefore,
+            estimatedAfter: budgeted.decision.estimatedAfter,
+            effectiveMaxTokens: budgeted.decision.effectiveMaxTokens,
+            briefMode: budgeted.decision.briefMode,
+          }));
+        }
+
         await provider.generate({
           model: agent.model,
-          system: agent.system || undefined,
-          messages: conversationMessages,
-          tools: availableTools.length > 0 ? availableTools : undefined,
+          system: budgeted.system,
+          messages: budgeted.messages,
+          tools: budgeted.tools,
           temperature: parameters.temperature as number,
-          maxTokens: parameters.maxTokens as number,
+          maxTokens: budgeted.maxTokens,
           topP: parameters.topP as number,
           reasoning: tools.advancedReasoning,
           onChunk: async (chunk) => {

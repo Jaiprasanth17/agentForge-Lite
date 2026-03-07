@@ -200,6 +200,21 @@ export default function TestConsole() {
           // Visual indicator that a tool is starting
           break;
 
+        case "token_budget":
+          // Token budget was applied to prevent context_length_exceeded
+          setMessages((msgs) => [
+            ...msgs,
+            {
+              id: `budget_${Date.now()}`,
+              role: "system",
+              content: data.briefMode
+                ? `⚡ Brief mode: context compressed (${data.estimatedBefore}→${data.estimatedAfter} tokens, max_tokens=${data.effectiveMaxTokens})`
+                : `📊 Token budget applied: ${data.action} (${data.estimatedBefore}→${data.estimatedAfter} tokens)`,
+              timestamp: Date.now(),
+            },
+          ]);
+          break;
+
         case "tool_rejected":
           setMessages((msgs) => [
             ...msgs,
