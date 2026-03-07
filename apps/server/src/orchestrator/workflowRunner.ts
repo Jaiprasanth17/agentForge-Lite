@@ -151,6 +151,16 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
           },
         });
       }
+      if (agentTools.advancedReasoning) {
+        availableTools.push({
+          type: "function",
+          function: {
+            name: "advancedReasoning",
+            description: "Perform multi-step reasoning and analysis on a given topic or question",
+            parameters: { type: "object", properties: { query: { type: "string" }, steps: { type: "number" } }, required: ["query"] },
+          },
+        });
+      }
 
       // Build messages
       const systemMsg = step.instruction + (previousStepOutput
@@ -256,10 +266,17 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
             const toolName: string = chunk.toolCall.name || chunk.toolCall.function?.name || "";
             const toolArgsRaw: string = chunk.toolCall.arguments || chunk.toolCall.function?.arguments || "{}";
 
+            // Skip tool calls with empty or missing names
+            if (!toolName || toolName.trim().length === 0) {
+              console.warn("[WorkflowRunner] Skipping tool call with empty name, id:", toolCallId);
+              return;
+            }
+
             let toolInput: Record<string, unknown> = {};
             try {
               toolInput = JSON.parse(toolArgsRaw);
             } catch {
+              console.warn("[WorkflowRunner] Failed to parse tool arguments for", toolName, ":", toolArgsRaw);
               toolInput = {};
             }
 

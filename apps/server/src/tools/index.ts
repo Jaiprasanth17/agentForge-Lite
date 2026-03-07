@@ -3,6 +3,7 @@ import "./webSearch";
 import "./codeInterpreter";
 import "./memory";
 import "./knowledgeSearch";
+import "./advancedReasoning";
 
 // Re-export registry functions
 export { TOOL_REGISTRY, invokeTool, registerTool } from "./registry";

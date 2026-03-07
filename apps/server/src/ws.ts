@@ -26,20 +26,36 @@ function buildToolContext(agentId: string): ToolContext {
   };
 }
 
+/** Safely send a message over WebSocket, ignoring errors if connection is closing/closed */
+function safeSend(ws: WebSocket, data: string): void {
+  try {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  } catch (err) {
+    console.warn("[WS] safeSend failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 export function setupWebSocket(wss: WebSocketServer): void {
   wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const agentId = url.searchParams.get("agentId");
 
+    // Handle WebSocket errors to prevent unhandled exceptions
+    ws.on("error", (err) => {
+      console.warn("[WS] Connection error:", err.message);
+    });
+
     if (!agentId) {
-      ws.send(JSON.stringify({ type: "error", text: "Missing agentId parameter" }));
+      safeSend(ws, JSON.stringify({ type: "error", text: "Missing agentId parameter" }));
       ws.close();
       return;
     }
 
     const agent = await prisma.agent.findUnique({ where: { id: agentId } });
     if (!agent) {
-      ws.send(JSON.stringify({ type: "error", text: "Agent not found" }));
+      safeSend(ws, JSON.stringify({ type: "error", text: "Agent not found" }));
       ws.close();
       return;
     }
@@ -52,7 +68,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
     const pendingToolApprovals = new Map<string, { name: string; args: string; resolve: (approved: boolean) => void }>();
     const toolCtx = buildToolContext(agentId);
 
-    ws.send(JSON.stringify({ type: "connected", agentId, agentName: agent.name }));
+    safeSend(ws, JSON.stringify({ type: "connected", agentId, agentName: agent.name }));
 
     ws.on("message", async (data) => {
       try {
@@ -75,7 +91,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
 
         if (msg.type === "clear") {
           conversationMessages.length = 0;
-          ws.send(JSON.stringify({ type: "cleared" }));
+          safeSend(ws, JSON.stringify({ type: "cleared" }));
           return;
         }
 
@@ -91,14 +107,14 @@ export function setupWebSocket(wss: WebSocketServer): void {
           if (memResult.ok) {
             const recalled = memResult.data as { text: string; score: number }[];
             if (recalled.length > 0) {
-              ws.send(
+              safeSend(ws,
                 JSON.stringify({
                   type: "tool_call_started",
                   name: "memory",
                   input: { query: msg.text, topK: 3 },
                 })
               );
-              ws.send(
+              safeSend(ws,
                 JSON.stringify({
                   type: "tool_call_result",
                   name: "memory",
@@ -128,7 +144,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
               function: {
                 name: "webSearch",
                 description: "Search the web for information",
-                parameters: { type: "object", properties: { query: { type: "string" }, topK: { type: "number" } }, required: ["query"] },
+                parameters: { type: "object", properties: { query: { type: "string", description: "Search query" }, topK: { type: "number", description: "Number of results" } }, required: ["query"] },
               },
             });
           }
@@ -138,7 +154,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
               function: {
                 name: "codeInterpreter",
                 description: "Execute code in a sandboxed environment",
-                parameters: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
+                parameters: { type: "object", properties: { code: { type: "string", description: "Code to execute" } }, required: ["code"] },
               },
             });
           }
@@ -148,7 +164,17 @@ export function setupWebSocket(wss: WebSocketServer): void {
               function: {
                 name: "knowledgeSearch",
                 description: "Search the local PDF knowledge base for relevant information with citations",
-                parameters: { type: "object", properties: { query: { type: "string" }, topK: { type: "number" } }, required: ["query"] },
+                parameters: { type: "object", properties: { query: { type: "string", description: "Search query" }, topK: { type: "number", description: "Number of results" } }, required: ["query"] },
+              },
+            });
+          }
+          if (tools.advancedReasoning) {
+            availableTools.push({
+              type: "function",
+              function: {
+                name: "advancedReasoning",
+                description: "Perform multi-step reasoning and analysis on a given topic or question",
+                parameters: { type: "object", properties: { query: { type: "string", description: "Topic or question to analyze" }, steps: { type: "number", description: "Number of reasoning steps (1-10)" } }, required: ["query"] },
               },
             });
           }
@@ -166,7 +192,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
 
         // Notify client if budget was applied
         if (budgeted.decision.applied) {
-          ws.send(JSON.stringify({
+          safeSend(ws, JSON.stringify({
             type: "token_budget",
             action: budgeted.decision.action,
             estimatedBefore: budgeted.decision.estimatedBefore,
@@ -187,32 +213,29 @@ export function setupWebSocket(wss: WebSocketServer): void {
           reasoning: tools.advancedReasoning,
           onChunk: async (chunk) => {
             if (chunk.text) {
-              ws.send(JSON.stringify({ type: "chunk", text: chunk.text }));
+              safeSend(ws, JSON.stringify({ type: "chunk", text: chunk.text }));
             }
             if (chunk.toolCall) {
               const toolCallId = chunk.toolCall.id || `tc_${Date.now()}`;
               const toolName: string = chunk.toolCall.name || chunk.toolCall.function?.name || "";
               const toolArgsRaw: string = chunk.toolCall.arguments || chunk.toolCall.function?.arguments || "{}";
 
+              // Skip tool calls with empty or missing names (malformed fragments)
+              if (!toolName || toolName.trim().length === 0) {
+                console.warn("[WS] Skipping tool call with empty name, id:", toolCallId);
+                return;
+              }
+
               // Parse tool arguments safely
               let toolInput: Record<string, unknown> = {};
               try {
                 toolInput = JSON.parse(toolArgsRaw);
               } catch {
+                console.warn("[WS] Failed to parse tool arguments for", toolName, ":", toolArgsRaw);
                 toolInput = {};
               }
 
-              ws.send(
-                JSON.stringify({
-                  type: "tool_call",
-                  toolCallId,
-                  name: toolName,
-                  arguments: toolArgsRaw,
-                })
-              );
-
-              // Emit tool_call_started event
-              ws.send(
+              safeSend(ws,
                 JSON.stringify({
                   type: "tool_call_started",
                   toolCallId,
@@ -223,7 +246,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
 
               if (humanInTheLoop) {
                 // Wait for approval
-                ws.send(
+                safeSend(ws,
                   JSON.stringify({
                     type: "tool_pending",
                     toolCallId,
@@ -244,7 +267,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
                 });
 
                 if (!approved) {
-                  ws.send(JSON.stringify({ type: "tool_rejected", toolCallId }));
+                  safeSend(ws, JSON.stringify({ type: "tool_rejected", toolCallId }));
                   return;
                 }
               }
@@ -253,7 +276,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
               const result = await invokeTool(toolCtx, toolName, toolInput);
 
               // Emit tool_call_result event
-              ws.send(
+              safeSend(ws,
                 JSON.stringify({
                   type: "tool_call_result",
                   toolCallId,
@@ -265,22 +288,10 @@ export function setupWebSocket(wss: WebSocketServer): void {
                   ms: (result.meta as Record<string, unknown>)?.ms || 0,
                 })
               );
-
-              // Also send legacy tool_result for backward compatibility
-              ws.send(
-                JSON.stringify({
-                  type: "tool_result",
-                  toolCallId,
-                  tool: toolName,
-                  result: result.ok
-                    ? (typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2))
-                    : `Tool error: ${result.error}`,
-                })
-              );
             }
             if (chunk.done) {
               const latency = Date.now() - startTime;
-              ws.send(
+              safeSend(ws,
                 JSON.stringify({
                   type: "done",
                   usage: chunk.usage,
@@ -295,7 +306,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
         // (We collect the full text from chunks on the client side)
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Unknown error";
-        ws.send(JSON.stringify({ type: "error", text: message }));
+        safeSend(ws, JSON.stringify({ type: "error", text: message }));
       }
     });
   });
