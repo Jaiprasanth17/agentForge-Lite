@@ -3,12 +3,30 @@ import { useState, useRef, useEffect } from "react";
 import { fetchProviderModels } from "../api/agents";
 import toast from "react-hot-toast";
 
+interface KnowledgeStatus {
+  documentCount: number;
+  chunkCount: number;
+  provider: string;
+}
+
+async function fetchKnowledgeStatus(): Promise<KnowledgeStatus> {
+  const res = await fetch("/api/knowledge/status");
+  if (!res.ok) throw new Error("Failed to fetch knowledge status");
+  return res.json();
+}
+
 export default function Settings() {
   const { data: providerData, isLoading } = useQuery({
     queryKey: ["providers"],
     queryFn: fetchProviderModels,
   });
 
+  const { data: knowledgeStatus, refetch: refetchKnowledge } = useQuery({
+    queryKey: ["knowledge-status"],
+    queryFn: fetchKnowledgeStatus,
+  });
+
+  const [reindexing, setReindexing] = useState(false);
   const [brandingImage, setBrandingImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -203,6 +221,71 @@ export default function Settings() {
           >
             Refresh Models
           </button>
+        </div>
+
+        {/* Knowledge Base */}
+        <div className="card">
+          <h2 className="text-lg font-semibold text-dark-200 mb-2">Knowledge Base</h2>
+          <p className="text-sm text-dark-400 mb-4">
+            PDF knowledge base for Retrieval-Augmented Generation (RAG). Drop PDFs into{" "}
+            <code className="text-accent-light bg-dark-800 px-1 rounded">apps/server/knowledge/pdfs/</code>{" "}
+            and reindex.
+          </p>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 bg-dark-800 rounded-lg border border-dark-600">
+              <div>
+                <p className="text-sm font-medium text-dark-200">Provider</p>
+                <p className="text-xs text-dark-400">{knowledgeStatus?.provider || "bm25"}</p>
+              </div>
+              <span className="text-xs px-2 py-1 rounded bg-dark-700 text-dark-400">
+                {knowledgeStatus?.provider === "openai" ? "Embeddings" : "BM25 (local)"}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-dark-800 rounded-lg border border-dark-600">
+              <div>
+                <p className="text-sm font-medium text-dark-200">Documents</p>
+                <p className="text-xs text-dark-400">{knowledgeStatus?.documentCount ?? 0} documents</p>
+              </div>
+              <span className="text-xs px-2 py-1 rounded bg-dark-700 text-dark-400">
+                {knowledgeStatus?.chunkCount ?? 0} chunks
+              </span>
+            </div>
+          </div>
+
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={async () => {
+                setReindexing(true);
+                try {
+                  const res = await fetch("/api/knowledge/reindex", { method: "POST" });
+                  if (res.ok) {
+                    toast.success("Knowledge base reindexed");
+                    refetchKnowledge();
+                  } else {
+                    toast.error("Reindex failed");
+                  }
+                } catch {
+                  toast.error("Reindex failed");
+                } finally {
+                  setReindexing(false);
+                }
+              }}
+              disabled={reindexing}
+              className="btn-primary text-sm"
+            >
+              {reindexing ? "Reindexing..." : "Reindex"}
+            </button>
+            <a
+              href="https://github.com/Jaiprasanth17/agentForge-Lite#knowledge-base"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-secondary text-sm"
+            >
+              Docs
+            </a>
+          </div>
         </div>
 
         {/* Environment Info */}

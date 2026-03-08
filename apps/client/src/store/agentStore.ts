@@ -34,6 +34,7 @@ const defaultForm: AgentFormState = {
     codeInterpreter: false,
     memory: false,
     advancedReasoning: false,
+    knowledge: false,
   },
   parameters: {
     temperature: 0.7,

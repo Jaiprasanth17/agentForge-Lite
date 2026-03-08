@@ -11,6 +11,7 @@ const TOOL_OPTIONS: { key: keyof AgentTools; label: string; description: string;
   { key: "codeInterpreter", label: "Code Interpreter", description: "Execute code in a sandboxed environment", icon: "💻" },
   { key: "memory", label: "Memory", description: "Embedding + vector lookup for context recall", icon: "🧠" },
   { key: "advancedReasoning", label: "Advanced Reasoning", description: "Enhanced reasoning capabilities", icon: "⚡" },
+  { key: "knowledge", label: "Knowledge", description: "Search PDF knowledge base with RAG citations", icon: "📚" },
 ];
 
 export default function AgentBuilder() {

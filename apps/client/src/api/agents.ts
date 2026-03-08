@@ -5,6 +5,7 @@ export interface AgentTools {
   codeInterpreter: boolean;
   memory: boolean;
   advancedReasoning: boolean;
+  knowledge: boolean;
 }
 
 export interface AgentParameters {

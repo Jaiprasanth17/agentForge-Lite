@@ -4,6 +4,29 @@ import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { fetchAgent } from "../api/agents";
 
+interface KnowledgeCitation {
+  text: string;
+  title: string;
+  path: string;
+  score: number;
+  documentId: string;
+  index: number;
+}
+
+interface SearchResult {
+  id: string;
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+interface SearchCitation {
+  title: string;
+  url: string;
+  content?: string;
+  tokens?: number;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
@@ -12,6 +35,14 @@ interface ChatMessage {
   toolName?: string;
   toolCallId?: string;
   pending?: boolean;
+  toolOk?: boolean;
+  toolError?: string;
+  toolCode?: string;
+  toolMs?: number;
+  citations?: KnowledgeCitation[];
+  searchResults?: SearchResult[];
+  searchCitations?: SearchCitation[];
+  searchAnalysis?: string;
 }
 
 interface UsageStats {
@@ -53,16 +84,20 @@ export default function TestConsole() {
   useEffect(() => {
     if (!id) return;
 
+    let cancelled = false;
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws/test?agentId=${id}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (cancelled) return;
       setIsConnected(true);
     };
 
     ws.onmessage = (event) => {
+      if (cancelled) return;
       const data = JSON.parse(event.data);
 
       switch (data.type) {
@@ -122,15 +157,122 @@ export default function TestConsole() {
           ]);
           break;
 
-        case "tool_result":
+        case "tool_call_result": {
+          // New structured tool result event
+          const citations: KnowledgeCitation[] = [];
+          const searchResults: SearchResult[] = [];
+          const searchCitations: SearchCitation[] = [];
+
+          if (data.ok && data.name === "knowledgeSearch" && data.data?.chunks) {
+            for (const c of data.data.chunks) {
+              citations.push({
+                text: c.text,
+                title: c.title,
+                path: c.path,
+                score: c.score,
+                documentId: c.documentId,
+                index: c.index,
+              });
+            }
+          }
+
+          // Handle search_web results
+          if (data.ok && data.name === "search_web" && data.data?.results) {
+            for (const r of data.data.results) {
+              searchResults.push({
+                id: r.id,
+                title: r.title,
+                url: r.url,
+                snippet: r.snippet,
+              });
+            }
+          }
+
+          // Extract search analysis
+          let searchAnalysis: string | undefined;
+          if (data.ok && data.name === "search_web" && data.data?.analysis) {
+            searchAnalysis = data.data.analysis;
+          }
+
+          // Handle click results (page content)
+          if (data.ok && data.name === "click" && data.data) {
+            searchCitations.push({
+              title: data.data.title || "Web Page",
+              url: data.data.url,
+              content: data.data.content,
+              tokens: data.data.tokens,
+            });
+          }
+
+          // Build content string
+          let toolContent = "";
+          if (!data.ok) {
+            toolContent = `Tool failed: ${data.error}${data.code ? ` [${data.code}]` : ""}`;
+          } else if (data.name === "knowledgeSearch") {
+            toolContent = `Found ${citations.length} citation(s)`;
+          } else if (data.name === "search_web") {
+            toolContent = `Found ${searchResults.length} search result(s)`;
+          } else if (data.name === "click") {
+            toolContent = `Fetched: ${data.data?.title || data.data?.url || "page"}${data.data?.tokens ? ` (${data.data.tokens} tokens)` : ""}`;
+          } else {
+            toolContent = typeof data.data === "string" ? data.data : JSON.stringify(data.data, null, 2);
+          }
+
           setMessages((msgs) => [
             ...msgs,
             {
-              id: `result_${data.toolCallId || Date.now()}`,
+              id: `tcr_${data.toolCallId || Date.now()}`,
               role: "tool",
-              content: data.result,
+              content: toolContent,
               timestamp: Date.now(),
-              toolName: data.tool,
+              toolName: data.name,
+              toolCallId: data.toolCallId,
+              toolOk: data.ok,
+              toolError: data.ok ? undefined : data.error,
+              toolCode: data.ok ? undefined : data.code,
+              toolMs: data.ms,
+              citations: citations.length > 0 ? citations : undefined,
+              searchResults: searchResults.length > 0 ? searchResults : undefined,
+              searchCitations: searchCitations.length > 0 ? searchCitations : undefined,
+              searchAnalysis: searchAnalysis,
+            },
+          ]);
+          break;
+        }
+
+        case "tool_result":
+          // Legacy tool_result - skip if already handled by tool_call_result
+          setMessages((msgs) => {
+            const alreadyHandled = msgs.some((m) => m.id === `tcr_${data.toolCallId}`);
+            if (alreadyHandled) return msgs;
+            return [
+              ...msgs,
+              {
+                id: `result_${data.toolCallId || Date.now()}`,
+                role: "tool",
+                content: data.result,
+                timestamp: Date.now(),
+                toolName: data.tool,
+              },
+            ];
+          });
+          break;
+
+        case "tool_call_started":
+          // Visual indicator that a tool is starting
+          break;
+
+        case "token_budget":
+          // Token budget was applied to prevent context_length_exceeded
+          setMessages((msgs) => [
+            ...msgs,
+            {
+              id: `budget_${Date.now()}`,
+              role: "system",
+              content: data.briefMode
+                ? `⚡ Brief mode: context compressed (${data.estimatedBefore}→${data.estimatedAfter} tokens, max_tokens=${data.effectiveMaxTokens})`
+                : `📊 Token budget applied: ${data.action} (${data.estimatedBefore}→${data.estimatedAfter} tokens)`,
+              timestamp: Date.now(),
             },
           ]);
           break;
@@ -161,15 +303,18 @@ export default function TestConsole() {
     };
 
     ws.onclose = () => {
+      if (cancelled) return;
       setIsConnected(false);
     };
 
     ws.onerror = () => {
+      if (cancelled) return;
       toast.error("WebSocket connection failed");
       setIsConnected(false);
     };
 
     return () => {
+      cancelled = true;
       ws.close();
     };
   }, [id]);
@@ -251,6 +396,10 @@ export default function TestConsole() {
             <div>
               <label className="text-xs font-medium text-dark-400 uppercase tracking-wider">Role</label>
               <p className="text-sm text-dark-200 mt-1">{agent.role || "Not set"}</p>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-dark-400 uppercase tracking-wider">Instructions</label>
+              <p className="text-sm text-dark-200 mt-1 whitespace-pre-wrap">{agent.system || "Not set"}</p>
             </div>
             <div>
               <label className="text-xs font-medium text-dark-400 uppercase tracking-wider">Tools</label>
@@ -404,11 +553,105 @@ export default function TestConsole() {
                 }`}
               >
                 {msg.role === "tool" && (
-                  <div className="text-xs text-accent-light mb-1 font-medium">
-                    🔧 {msg.toolName || "Tool"}
+                  <div className="flex items-center gap-2 text-xs mb-1 font-medium">
+                    <span className={msg.toolOk === false ? "text-danger" : "text-accent-light"}>
+                      🔧 {msg.toolName || "Tool"}
+                    </span>
+                    {msg.toolMs !== undefined && (
+                      <span className="text-dark-500">{msg.toolMs}ms</span>
+                    )}
+                    {msg.toolOk === false && msg.toolCode && (
+                      <span className="text-danger/70 bg-danger/10 px-1.5 py-0.5 rounded text-[10px]">
+                        {msg.toolCode}
+                      </span>
+                    )}
                   </div>
                 )}
                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                {msg.searchAnalysis && (
+                  <div className="mt-3 bg-gradient-to-r from-accent/10 to-accent/5 border border-accent/20 rounded-lg p-3">
+                    <div className="text-xs text-accent-light font-bold mb-2 uppercase tracking-wider">🤖 AI Analysis</div>
+                    <div className="text-sm leading-relaxed text-dark-100 prose prose-invert max-w-none">
+                      {msg.searchAnalysis.split('\n').map((para, i) => (
+                        <p key={i} className="mb-2 last:mb-0 whitespace-pre-wrap">
+                          {para}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {msg.citations && msg.citations.length > 0 && (
+                  <div className="mt-2 space-y-2 border-t border-dark-600 pt-2">
+                    <div className="text-xs text-accent-light font-medium">Citations:</div>
+                    {msg.citations.map((cite, i) => (
+                      <div key={i} className="bg-dark-800 rounded-lg p-2 text-xs">
+                        <div className="flex items-center justify-between mb-1">
+                          <a
+                            href={`/static/knowledge/${cite.path.split("/").pop()}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-accent hover:underline font-medium"
+                          >
+                            {cite.title}
+                          </a>
+                          <span className="text-dark-500">
+                            Score: {(cite.score * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <p className="text-dark-300 line-clamp-3">{cite.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {msg.searchResults && msg.searchResults.length > 0 && (
+                  <div className="mt-2 space-y-2 border-t border-dark-600 pt-2">
+                    <div className="text-xs text-accent-light font-medium">Search Results:</div>
+                    {msg.searchResults.map((result, i) => (
+                      <div key={i} className="bg-dark-800 rounded-lg p-2 text-xs">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-dark-500 font-mono">[{i + 1}]</span>
+                          <a
+                            href={result.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-accent hover:underline font-medium truncate"
+                          >
+                            {result.title}
+                          </a>
+                        </div>
+                        <p className="text-dark-400 text-[11px] truncate mb-1">{result.url}</p>
+                        {result.snippet && (
+                          <p className="text-dark-300 line-clamp-2">{result.snippet}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {msg.searchCitations && msg.searchCitations.length > 0 && (
+                  <div className="mt-2 space-y-2 border-t border-dark-600 pt-2">
+                    <div className="text-xs text-accent-light font-medium">Page Content:</div>
+                    {msg.searchCitations.map((cite, i) => (
+                      <div key={i} className="bg-dark-800 rounded-lg p-2 text-xs">
+                        <div className="flex items-center justify-between mb-1">
+                          <a
+                            href={cite.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-accent hover:underline font-medium truncate"
+                          >
+                            {cite.title}
+                          </a>
+                          {cite.tokens && (
+                            <span className="text-dark-500 text-[10px]">{cite.tokens} tokens</span>
+                          )}
+                        </div>
+                        {cite.content && (
+                          <p className="text-dark-300 line-clamp-4 whitespace-pre-wrap">{cite.content}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {msg.pending && (
                   <div className="flex gap-2 mt-2">
                     <button

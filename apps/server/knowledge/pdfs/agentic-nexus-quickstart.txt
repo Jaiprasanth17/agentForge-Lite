@@ -1,0 +1,77 @@
+Agentic Nexus Quick Start Guide
+
+What is Agentic Nexus?
+Agentic Nexus is a full-stack platform for building, testing, and deploying AI agents and agentic workflows. It provides a visual builder for configuring agents with custom personas, tools, and parameters, plus a streaming test console with human-in-the-loop approval gates.
+
+Key Features:
+- Agent Builder: Create AI agents with custom names, roles, system instructions, and tool configurations
+- Test Console: Interactive chat interface with real-time WebSocket streaming and tool call visibility
+- Workflow Engine: Build multi-step agentic workflows with ordered steps, each optionally bound to an agent
+- Human-in-the-Loop: Approval gates that pause execution until a human approves, rejects, or edits
+- Tool Registry: Typed, validated tool system with web search, code interpreter, memory, and knowledge search
+- Knowledge Base: PDF/TXT ingestion with BM25 search for retrieval-augmented generation (RAG)
+- Multiple LLM Providers: OpenAI, Anthropic, and Mock provider for offline testing
+
+Getting Started:
+1. Clone the repository and install dependencies: npm install
+2. Push the database schema: npm run db:push
+3. Seed sample data: npm run seed
+4. Start the development server: npm run dev
+5. Open http://localhost:5173 in your browser
+
+Creating an Agent:
+1. Click "New Agent" in the left navigation
+2. Fill in the agent name, select a model, and write a role/persona
+3. Add system instructions that define the agent's behavior
+4. Toggle tools: Web Search, Code Interpreter, Memory, Knowledge
+5. Adjust parameters: Temperature, Max Tokens, Top-P
+6. Click "Deploy" to activate the agent
+
+Testing an Agent:
+1. Navigate to the agent's Test Console
+2. Type a message and press Enter
+3. Watch the streaming response with tool call indicators
+4. If human-in-the-loop is enabled, approve or reject tool calls as they appear
+5. View token usage and latency statistics after each response
+
+Creating a Workflow:
+1. Click "New Workflow" in the left navigation
+2. Add a name and description
+3. Select a trigger type: Manual, Schedule (cron), Webhook, or Event
+4. Add steps with titles, instructions, and optional agent bindings
+5. Enable "Require Approval" on steps that need human review
+6. Click "Deploy" to activate the workflow
+
+Running a Workflow:
+1. Click "Run" on any workflow from the list or builder
+2. The Run Console shows step-by-step progression with streaming logs
+3. Approval gates pause execution and show Approve/Reject buttons
+4. Final status shows duration and token usage
+
+Knowledge Base:
+1. Drop PDF or TXT files into apps/server/knowledge/pdfs/
+2. Run npm run ingest:knowledge to parse and chunk documents
+3. Enable the Knowledge tool on any agent in the Agent Builder
+4. Ask questions that reference your documents - citations will appear in responses
+5. Check Settings > Knowledge Base for document and chunk counts
+
+Tools Available:
+- Web Search: Simulated web search that returns relevant results
+- Code Interpreter: Executes code snippets in a sandboxed environment
+- Memory: Stores and retrieves conversation context across sessions
+- Knowledge Search: Searches ingested documents using BM25 relevance scoring
+
+Architecture:
+- Frontend: React 18 + Vite + TypeScript + TailwindCSS
+- Backend: Node.js + Express + TypeScript
+- Database: SQLite via Prisma ORM
+- Real-time: WebSocket for streaming responses and tool events
+- State: Zustand for client state, React Query for server cache
+
+Environment Variables:
+- LLM_PROVIDER: openai | anthropic | mock (default: mock)
+- OPENAI_API_KEY: Your OpenAI API key
+- ANTHROPIC_API_KEY: Your Anthropic API key
+- KNOWLEDGE_PROVIDER: bm25 | openai (default: bm25)
+- SERVER_PORT: Backend port (default: 8080)
+- PORT: Frontend port (default: 5173)

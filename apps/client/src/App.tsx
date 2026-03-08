@@ -5,6 +5,10 @@ import AgentBuilder from "./pages/AgentBuilder";
 import AgentList from "./pages/AgentList";
 import TestConsole from "./pages/TestConsole";
 import Settings from "./pages/Settings";
+import WorkflowsList from "./pages/WorkflowsList";
+import WorkflowBuilder from "./pages/WorkflowBuilder";
+import WorkflowRunConsole from "./pages/WorkflowRunConsole";
+import Help from "./pages/Help";
 
 export default function App() {
   return (
@@ -15,7 +19,12 @@ export default function App() {
         <Route path="agents/new" element={<AgentBuilder />} />
         <Route path="agents/:id" element={<AgentBuilder />} />
         <Route path="agents/:id/test" element={<TestConsole />} />
+        <Route path="workflows" element={<WorkflowsList />} />
+        <Route path="workflows/new" element={<WorkflowBuilder />} />
+        <Route path="workflows/:id" element={<WorkflowBuilder />} />
+        <Route path="workflows/:id/run/:runId" element={<WorkflowRunConsole />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="help" element={<Help />} />
       </Route>
     </Routes>
   );

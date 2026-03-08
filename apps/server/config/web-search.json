@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "provider": "openai",
+  "mode": "lookup",
+  "timeoutMs": 90000,
+  "searchContextSize": "medium",
+  "allowedDomains": [
+    "bis.org",
+    "imf.org",
+    "rbi.org.in",
+    "bankofengland.co.uk",
+    "sec.gov",
+    "europa.eu"
+  ],
+  "blocklistDomains": [],
+  "maxPages": 5,
+  "maxCostUSD": 0.25,
+  "locale": "en-IN",
+  "userLocation": {
+    "city": "Hyderabad",
+    "country": "IN"
+  },
+  "retries": {
+    "max": 3,
+    "baseDelayMs": 1500,
+    "exponent": 2.0
+  },
+  "failOpenToFallback": true,
+  "fallbackProviders": [],
+  "circuitBreaker": {
+    "consecutiveFailures": 3,
+    "windowMs": 300000,
+    "downgradeMode": "lookup"
+  }
+}

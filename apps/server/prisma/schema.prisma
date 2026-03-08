@@ -31,3 +31,64 @@ model Conversation {
 
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
 }
+
+model Workflow {
+  id            String         @id @default(cuid())
+  name          String
+  description   String?
+  trigger       String         @default("manual") // manual|schedule|webhook|event
+  scheduleCron  String?
+  status        String         @default("draft")  // draft|active|archived
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  steps         WorkflowStep[]
+  runs          WorkflowRun[]
+}
+
+model WorkflowStep {
+  id              String   @id @default(cuid())
+  workflowId      String
+  order           Int
+  title           String
+  instruction     String
+  agentId         String?
+  requireApproval Boolean  @default(false)
+
+  workflow        Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, order])
+}
+
+model WorkflowRun {
+  id           String    @id @default(cuid())
+  workflowId   String
+  status       String    @default("queued") // queued|running|succeeded|failed|cancelled
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  log          String?   // JSON string: structured events per step
+  usage        String?   // JSON string: token / cost
+
+  workflow     Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String
+  path      String   @unique
+  source    String   // 'pdf'
+  createdAt DateTime @default(now())
+  chunks    Chunk[]
+}
+
+model Chunk {
+  id          String   @id @default(cuid())
+  documentId  String
+  index       Int
+  text        String
+  embedding   Bytes?   // store as blob when using embeddings
+  createdAt   DateTime @default(now())
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, index])
+}
