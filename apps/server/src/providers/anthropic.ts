@@ -2,10 +2,9 @@ import { LLMProvider, ProviderResponseChunk } from "./types";
 
 export class AnthropicProvider implements LLMProvider {
   name = "anthropic";
-  private apiKey: string;
 
-  constructor() {
-    this.apiKey = process.env.ANTHROPIC_API_KEY || "";
+  private get apiKey(): string {
+    return process.env.ANTHROPIC_API_KEY || "";
   }
 
   async listModels(): Promise<string[]> {

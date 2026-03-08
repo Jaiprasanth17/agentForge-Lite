@@ -57,7 +57,7 @@ describe("Agent Form Validation", () => {
       model: "gpt-4o-mini",
       role: "Assistant",
       system: "You are helpful.",
-      tools: { webSearch: true, codeInterpreter: false, memory: true, advancedReasoning: false },
+      tools: { webSearch: true, codeInterpreter: false, memory: true, advancedReasoning: false, knowledge: false },
       parameters: { temperature: 0.8, maxTokens: 2048, topP: 0.9, toolChoice: "auto", contextBudget: 16000 },
       status: "active",
       createdAt: new Date().toISOString(),
