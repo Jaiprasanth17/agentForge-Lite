@@ -303,9 +303,23 @@ export function slimToolSchemas(tools: ToolSchema[]): ToolSchema[] {
       for (const [key, val] of Object.entries(params.properties as Record<string, unknown>)) {
         // Keep required fields; for optional, only include if few enough
         if (required.includes(key)) {
-          // Strip description from the property, keep only type
+          // Preserve essential schema properties (type, items, minItems, maxItems)
+          // while stripping descriptions
           const prop = val as Record<string, unknown>;
-          slimProps[key] = { type: prop.type };
+          const slimProp: Record<string, unknown> = { type: prop.type };
+          
+          // Preserve array constraints and item schema
+          if (prop.items) {
+            slimProp.items = prop.items;
+          }
+          if (prop.minItems !== undefined) {
+            slimProp.minItems = prop.minItems;
+          }
+          if (prop.maxItems !== undefined) {
+            slimProp.maxItems = prop.maxItems;
+          }
+          
+          slimProps[key] = slimProp;
         }
       }
       slimParams.properties = slimProps;
