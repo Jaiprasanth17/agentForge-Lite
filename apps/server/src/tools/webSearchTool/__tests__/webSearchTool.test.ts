@@ -6,6 +6,7 @@
  * - planner (mode inference, domain filtering, time windows, query planning)
  * - reranker (dedup, domain emphasis, top-k scoring)
  * - config loading
+ * - circuit breaker
  * - observability hooks
  */
 
@@ -30,16 +31,24 @@ import {
   isDomainAllowed,
   filterDomains,
 } from "../planner";
-import type { PlannedQuery } from "../planner";
 import type { WebSearchConfig, SearchRequest } from "../schemas";
 
 // Reranker
-import { rerank, mergeSearchResults } from "../reranker";
-import type { RankedSource } from "../reranker";
+import { rerank, mergeSearchResults, scoreDomain, normaliseUrl, textSimilarity } from "../reranker";
+import type { RankedCitation } from "../reranker";
 import type { Citation, Source } from "../schemas";
 
-// Config
-import { loadConfig, resetConfig, onMetric, isWebSearchEnabled } from "../index";
+// Config & observability
+import {
+  loadConfig,
+  resetConfig,
+  onMetric,
+  isWebSearchEnabled,
+  recordTimeout,
+  recordSuccess,
+  getEffectiveMode,
+  resetCircuitBreaker,
+} from "../index";
 
 // ---------------------------------------------------------------------------
 // Test config helper
@@ -49,14 +58,12 @@ function makeConfig(overrides?: Partial<WebSearchConfig>): WebSearchConfig {
   return WebSearchConfigSchema.parse({
     mode: "lookup",
     allowedDomains: ["bis.org", "imf.org", "rbi.org.in", "sec.gov"],
-    bannedDomains: [],
-    maxPages: 6,
+    blocklistDomains: [],
+    maxPages: 5,
     searchContextSize: "medium",
-    defaultLocale: "en-IN",
-    timeoutMs: { lookup: 6000, agentic: 20000, deep: 240000 },
+    locale: "en-IN",
+    timeoutMs: 90000,
     maxCostUSD: 0.25,
-    retries: 3,
-    retryBaseDelayMs: 1000,
     ...overrides,
   });
 }
@@ -89,56 +96,80 @@ describe("Schemas", () => {
   describe("CitationSchema", () => {
     it("validates a complete citation", () => {
       const citation = CitationSchema.parse({
-        index: 1,
         title: "Test Citation",
         url: "https://example.com/article",
-        startIndex: 0,
-        endIndex: 50,
       });
-      expect(citation.index).toBe(1);
       expect(citation.url).toBe("https://example.com/article");
+      expect(citation.title).toBe("Test Citation");
     });
 
-    it("allows optional fields", () => {
+    it("allows optional title", () => {
       const citation = CitationSchema.parse({
-        index: 1,
-        title: "Test",
         url: "https://example.com",
       });
-      expect(citation.startIndex).toBeUndefined();
+      expect(citation.title).toBeUndefined();
     });
 
     it("rejects invalid URLs", () => {
       expect(() =>
-        CitationSchema.parse({ index: 1, title: "Test", url: "not-a-url" })
-      ).toThrow();
-    });
-
-    it("rejects non-positive index", () => {
-      expect(() =>
-        CitationSchema.parse({ index: 0, title: "Test", url: "https://example.com" })
+        CitationSchema.parse({ title: "Test", url: "not-a-url" })
       ).toThrow();
     });
   });
 
   describe("SourceSchema", () => {
-    it("validates a source", () => {
+    it("validates a source with action types", () => {
       const source = SourceSchema.parse({
-        title: "BIS Report",
         url: "https://bis.org/report",
-        snippet: "Summary of the report",
-        credibilityScore: 9,
+        action: "search",
+        id: "ws_call_1",
       });
-      expect(source.credibilityScore).toBe(9);
+      expect(source.action).toBe("search");
+      expect(source.id).toBe("ws_call_1");
     });
 
-    it("allows optional credibilityScore", () => {
+    it("accepts open_page action", () => {
       const source = SourceSchema.parse({
-        title: "Test",
-        url: "https://example.com",
-        snippet: "Test snippet",
+        url: "https://imf.org/paper",
+        action: "open_page",
+        id: "ws_call_2",
       });
-      expect(source.credibilityScore).toBeUndefined();
+      expect(source.action).toBe("open_page");
+    });
+
+    it("accepts find_in_page action", () => {
+      const source = SourceSchema.parse({
+        url: "https://sec.gov/filing",
+        action: "find_in_page",
+        id: "ws_call_3",
+      });
+      expect(source.action).toBe("find_in_page");
+    });
+
+    it("rejects unknown action types", () => {
+      expect(() =>
+        SourceSchema.parse({ url: "https://example.com", action: "browse", id: "1" })
+      ).toThrow();
+    });
+  });
+
+  describe("SearchDebugSchema", () => {
+    it("validates debug payload", () => {
+      const debug = SearchDebugSchema.parse({
+        toolCalls: [{ type: "web_search_call" }],
+        latencyMs: 1500,
+        cost: { toolCallsUSD: 0.035 },
+      });
+      expect(debug.latencyMs).toBe(1500);
+      expect(debug.cost.toolCallsUSD).toBe(0.035);
+    });
+
+    it("defaults toolCalls to empty array", () => {
+      const debug = SearchDebugSchema.parse({
+        latencyMs: 100,
+        cost: { toolCallsUSD: 0 },
+      });
+      expect(debug.toolCalls).toEqual([]);
     });
   });
 
@@ -181,24 +212,20 @@ describe("Schemas", () => {
       const resp = SearchResponseSchema.parse({
         answer: "Test answer with [citation](https://example.com)",
         citations: [
-          { index: 1, title: "Example", url: "https://example.com" },
+          { title: "Example", url: "https://example.com" },
         ],
         sources: [
-          { title: "Example", url: "https://example.com", snippet: "Test" },
+          { url: "https://example.com", action: "search", id: "ws_1" },
         ],
         debug: {
-          callId: "ws_123",
-          actions: [{ type: "search" }],
-          costUSD: 0.001,
+          toolCalls: [{ type: "web_search_call" }],
           latencyMs: 500,
-          provider: "openai",
-          mode: "lookup",
-          tokensIn: 100,
-          tokensOut: 200,
+          cost: { toolCallsUSD: 0.03 },
         },
       });
       expect(resp.answer).toContain("citation");
-      expect(resp.debug.provider).toBe("openai");
+      expect(resp.citations.length).toBe(1);
+      expect(resp.sources[0].action).toBe("search");
     });
   });
 
@@ -206,10 +233,15 @@ describe("Schemas", () => {
     it("applies defaults", () => {
       const config = WebSearchConfigSchema.parse({});
       expect(config.mode).toBe("lookup");
-      expect(config.maxPages).toBe(6);
+      expect(config.maxPages).toBe(5);
       expect(config.searchContextSize).toBe("medium");
-      expect(config.defaultLocale).toBe("en-IN");
+      expect(config.locale).toBe("en-IN");
       expect(config.maxCostUSD).toBe(0.25);
+      expect(config.retries.max).toBe(3);
+      expect(config.retries.baseDelayMs).toBe(1500);
+      expect(config.retries.exponent).toBe(2.0);
+      expect(config.circuitBreaker.consecutiveFailures).toBe(3);
+      expect(config.circuitBreaker.windowMs).toBe(300000);
     });
 
     it("overrides defaults", () => {
@@ -242,7 +274,7 @@ describe("Planner", () => {
     });
 
     it("returns agentic for verification queries", () => {
-      expect(inferMode("Verify RBI's stance on gen-AI risk controls", "lookup")).toBe("agentic");
+      expect(inferMode("Verify RBI stance on gen-AI risk controls", "lookup")).toBe("agentic");
     });
 
     it("respects config mode=deep override", () => {
@@ -312,7 +344,7 @@ describe("Planner", () => {
       expect(planned.mode).toBe("lookup");
       expect(planned.allowedDomains).toEqual(config.allowedDomains);
       expect(planned.locale).toBe("en-IN");
-      expect(planned.maxPages).toBe(6);
+      expect(planned.maxPages).toBe(5);
       expect(planned.prompt).toContain("Include citations");
     });
 
@@ -347,10 +379,10 @@ describe("Planner", () => {
     });
 
     it("resolves timeout from mode", () => {
-      const reqLookup: SearchRequest = { query: "test" };
+      const reqLookup: SearchRequest = { query: "test", mode: "lookup" };
       const reqDeep: SearchRequest = { query: "test", mode: "deep" };
 
-      expect(plan(reqLookup, config).timeoutMs).toBe(6000);
+      expect(plan(reqLookup, config).timeoutMs).toBe(60000);
       expect(plan(reqDeep, config).timeoutMs).toBe(240000);
     });
   });
@@ -361,120 +393,141 @@ describe("Planner", () => {
 // ---------------------------------------------------------------------------
 
 describe("Reranker", () => {
-  const makeSources = (): Source[] => [
-    { title: "BIS Report", url: "https://bis.org/report/2025", snippet: "Capital adequacy framework update" },
-    { title: "Random Blog", url: "https://medium.com/ai-stuff", snippet: "My thoughts on AI in banking" },
-    { title: "IMF Working Paper", url: "https://imf.org/wp/2025/01", snippet: "Financial stability and AI risks" },
-    { title: "SEC Filing", url: "https://sec.gov/filing/123", snippet: "Regulatory filing on AI disclosure" },
-    { title: "Duplicate BIS", url: "https://bis.org/report/2025/", snippet: "Capital adequacy framework update" },
-    { title: "Pinterest Pin", url: "https://pinterest.com/banking-ai", snippet: "Banking AI images" },
+  const makeCitations = (): Citation[] => [
+    { title: "BIS Report", url: "https://bis.org/report/2025" },
+    { title: "Random Blog", url: "https://medium.com/ai-stuff" },
+    { title: "IMF Working Paper", url: "https://imf.org/wp/2025/01" },
+    { title: "SEC Filing", url: "https://sec.gov/filing/123" },
+    { title: "Duplicate BIS", url: "https://bis.org/report/2025/" },
+    { title: "Pinterest Pin", url: "https://pinterest.com/banking-ai" },
   ];
 
-  const makeCitations = (): Citation[] => [
-    { index: 1, title: "BIS Report", url: "https://bis.org/report/2025" },
-    { index: 2, title: "IMF Paper", url: "https://imf.org/wp/2025/01" },
-    { index: 3, title: "External", url: "https://external.com/article" },
+  const makeSources = (): Source[] => [
+    { url: "https://bis.org/report/2025", action: "search", id: "ws_1" },
+    { url: "https://medium.com/ai-stuff", action: "search", id: "ws_2" },
+    { url: "https://imf.org/wp/2025/01", action: "open_page", id: "ws_3" },
+    { url: "https://sec.gov/filing/123", action: "search", id: "ws_4" },
+    { url: "https://pinterest.com/banking-ai", action: "search", id: "ws_5" },
   ];
+
+  describe("scoreDomain", () => {
+    it("gives high scores to authoritative domains", () => {
+      expect(scoreDomain("https://bis.org/report", [])).toBe(10);
+      expect(scoreDomain("https://imf.org/paper", [])).toBe(10);
+      expect(scoreDomain("https://rbi.org.in/circular", [])).toBe(10);
+    });
+
+    it("penalises low-credibility domains", () => {
+      expect(scoreDomain("https://medium.com/post", [])).toBe(2);
+      expect(scoreDomain("https://pinterest.com/pin", [])).toBe(2);
+    });
+
+    it("boosts allowed domains", () => {
+      expect(scoreDomain("https://custom-bank.com/report", ["custom-bank.com"])).toBe(9);
+    });
+
+    it("gives .gov domains high scores", () => {
+      expect(scoreDomain("https://treasury.gov/data", [])).toBe(10);
+    });
+  });
+
+  describe("normaliseUrl", () => {
+    it("removes trailing slashes", () => {
+      expect(normaliseUrl("https://bis.org/report/")).toBe("bis.org/report");
+    });
+
+    it("removes www prefix", () => {
+      expect(normaliseUrl("https://www.imf.org/paper")).toBe("imf.org/paper");
+    });
+
+    it("handles invalid URLs gracefully", () => {
+      expect(normaliseUrl("not-a-url")).toBe("not-a-url");
+    });
+  });
+
+  describe("textSimilarity", () => {
+    it("returns high similarity for identical strings", () => {
+      expect(textSimilarity("hello world", "hello world")).toBeGreaterThan(0.9);
+    });
+
+    it("returns low similarity for different strings", () => {
+      expect(textSimilarity("hello world", "goodbye moon")).toBeLessThan(0.3);
+    });
+
+    it("returns 0 for empty strings", () => {
+      expect(textSimilarity("", "hello")).toBe(0);
+    });
+  });
 
   describe("rerank", () => {
     it("removes exact URL duplicates (normalised)", () => {
+      const citations = makeCitations();
       const sources = makeSources();
-      const result = rerank(sources, [], { topK: 10 });
-      const urls = result.sources.map((s) => s.url);
+      const result = rerank(citations, sources, { topK: 10 });
+      const urls = result.citations.map((c) => c.url);
       // bis.org/report/2025 and bis.org/report/2025/ should be deduped
       const bisUrls = urls.filter((u) => u.includes("bis.org"));
       expect(bisUrls.length).toBe(1);
     });
 
     it("emphasizes allowed domains", () => {
+      const citations = makeCitations();
       const sources = makeSources();
-      const result = rerank(sources, [], {
+      const result = rerank(citations, sources, {
         topK: 5,
         allowedDomains: ["bis.org", "imf.org", "sec.gov"],
       });
 
-      // Top results should be from authoritative domains
-      expect(result.sources[0].url).toContain("bis.org");
-      expect(result.sources[0].score).toBeGreaterThan(0.5);
+      // Top result should be from an authoritative domain
+      expect(result.citations[0].url).toContain("bis.org");
+      expect(result.citations[0].score).toBeGreaterThan(0.5);
     });
 
     it("penalizes low-credibility domains", () => {
+      const citations = makeCitations();
       const sources = makeSources();
-      const result = rerank(sources, [], { topK: 10 });
+      const result = rerank(citations, sources, { topK: 10 });
 
-      const mediumSource = result.sources.find((s) => s.url.includes("medium.com"));
-      const pinterestSource = result.sources.find((s) => s.url.includes("pinterest.com"));
-      const bisSource = result.sources.find((s) => s.url.includes("bis.org"));
+      const mediumCitation = result.citations.find((c) => c.url.includes("medium.com"));
+      const bisCitation = result.citations.find((c) => c.url.includes("bis.org"));
 
-      if (mediumSource && bisSource) {
-        expect(mediumSource.score).toBeLessThan(bisSource.score);
-      }
-      if (pinterestSource && bisSource) {
-        expect(pinterestSource.score).toBeLessThan(bisSource.score);
+      if (mediumCitation && bisCitation) {
+        expect(mediumCitation.score).toBeLessThan(bisCitation.score);
       }
     });
 
     it("respects topK limit", () => {
-      const sources = makeSources();
-      const result = rerank(sources, [], { topK: 2 });
-      expect(result.sources.length).toBeLessThanOrEqual(2);
-    });
-
-    it("filters citations to match top sources", () => {
-      const sources = makeSources();
       const citations = makeCitations();
-      const result = rerank(sources, citations, {
-        topK: 3,
-        allowedDomains: ["bis.org", "imf.org", "sec.gov"],
-      });
-
-      // External citation should be filtered out since external.com isn't in top sources
-      for (const c of result.citations) {
-        const inSources = result.sources.some(
-          (s) => new URL(s.url).hostname === new URL(c.url).hostname
-        );
-        expect(inSources).toBe(true);
-      }
-    });
-
-    it("re-indexes citations after filtering", () => {
       const sources = makeSources();
-      const citations = makeCitations();
-      const result = rerank(sources, citations, { topK: 10 });
-
-      if (result.citations.length > 0) {
-        expect(result.citations[0].index).toBe(1);
-        for (let i = 1; i < result.citations.length; i++) {
-          expect(result.citations[i].index).toBe(i + 1);
-        }
-      }
+      const result = rerank(citations, sources, { topK: 2 });
+      expect(result.citations.length).toBeLessThanOrEqual(2);
     });
   });
 
   describe("mergeSearchResults", () => {
     it("merges and dedupes results from multiple passes", () => {
       const pass1 = {
-        sources: [
-          { title: "BIS A", url: "https://bis.org/a", snippet: "First pass result" },
-          { title: "IMF B", url: "https://imf.org/b", snippet: "First pass IMF" },
-        ] as Source[],
         citations: [
-          { index: 1, title: "BIS A", url: "https://bis.org/a" },
+          { title: "BIS A", url: "https://bis.org/a" },
+          { title: "IMF B", url: "https://imf.org/b" },
         ] as Citation[],
+        sources: [
+          { url: "https://bis.org/a", action: "search" as const, id: "ws_1" },
+        ] as Source[],
       };
       const pass2 = {
-        sources: [
-          { title: "BIS A Dup", url: "https://bis.org/a", snippet: "Duplicate" },
-          { title: "SEC C", url: "https://sec.gov/c", snippet: "Second pass SEC" },
-        ] as Source[],
         citations: [
-          { index: 1, title: "SEC C", url: "https://sec.gov/c" },
+          { title: "BIS A Dup", url: "https://bis.org/a" },
+          { title: "SEC C", url: "https://sec.gov/c" },
         ] as Citation[],
+        sources: [
+          { url: "https://sec.gov/c", action: "search" as const, id: "ws_2" },
+        ] as Source[],
       };
 
       const merged = mergeSearchResults([pass1, pass2], { topK: 10 });
-      // Should have 3 unique sources (BIS A deduped)
-      expect(merged.sources.length).toBe(3);
+      // Should have 3 unique citations (BIS A deduped)
+      expect(merged.citations.length).toBe(3);
     });
   });
 });
@@ -503,27 +556,84 @@ describe("Config", () => {
     delete process.env.WEB_SEARCH_MODE;
   });
 
-  it("respects ALLOWED_DOMAINS env override", () => {
-    process.env.ALLOWED_DOMAINS = "custom.org,test.com";
+  it("respects WEB_SEARCH_ALLOWED_DOMAINS env override", () => {
+    process.env.WEB_SEARCH_ALLOWED_DOMAINS = "custom.org,test.com";
     resetConfig();
     const config = loadConfig();
     expect(config.allowedDomains).toEqual(["custom.org", "test.com"]);
-    delete process.env.ALLOWED_DOMAINS;
+    delete process.env.WEB_SEARCH_ALLOWED_DOMAINS;
   });
 });
 
 describe("Feature flags", () => {
+  beforeEach(() => {
+    resetConfig();
+  });
+
   it("isWebSearchEnabled defaults to true", () => {
     const original = process.env.WEB_SEARCH_ENABLED;
     delete process.env.WEB_SEARCH_ENABLED;
+    resetConfig();
     expect(isWebSearchEnabled()).toBe(true);
     if (original !== undefined) process.env.WEB_SEARCH_ENABLED = original;
   });
 
   it("isWebSearchEnabled respects false", () => {
     process.env.WEB_SEARCH_ENABLED = "false";
+    resetConfig();
     expect(isWebSearchEnabled()).toBe(false);
     delete process.env.WEB_SEARCH_ENABLED;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Circuit breaker tests
+// ---------------------------------------------------------------------------
+
+describe("Circuit Breaker", () => {
+  beforeEach(() => {
+    resetCircuitBreaker();
+    resetConfig();
+  });
+
+  it("does not downgrade before threshold", () => {
+    recordTimeout();
+    recordTimeout();
+    // Only 2 failures, threshold is 3
+    expect(getEffectiveMode("deep")).toBe("deep");
+  });
+
+  it("downgrades to lookup after 3 consecutive timeouts", () => {
+    recordTimeout();
+    recordTimeout();
+    recordTimeout();
+    expect(getEffectiveMode("deep")).toBe("lookup");
+    expect(getEffectiveMode("agentic")).toBe("lookup");
+  });
+
+  it("does not downgrade lookup further", () => {
+    recordTimeout();
+    recordTimeout();
+    recordTimeout();
+    expect(getEffectiveMode("lookup")).toBe("lookup");
+  });
+
+  it("resets after successful call", () => {
+    recordTimeout();
+    recordTimeout();
+    recordTimeout();
+    expect(getEffectiveMode("deep")).toBe("lookup");
+
+    recordSuccess();
+    expect(getEffectiveMode("deep")).toBe("deep");
+  });
+
+  it("resetCircuitBreaker clears state", () => {
+    recordTimeout();
+    recordTimeout();
+    recordTimeout();
+    resetCircuitBreaker();
+    expect(getEffectiveMode("deep")).toBe("deep");
   });
 });
 
@@ -538,12 +648,8 @@ describe("Observability", () => {
       events.push(event.type);
     });
 
-    // Listener registered - we can't easily trigger events without calling search()
-    // but we can verify the subscribe/unsubscribe mechanism
     expect(typeof unsubscribe).toBe("function");
-
     unsubscribe();
-    // After unsubscribe, no more events should be captured
   });
 });
 
@@ -555,11 +661,11 @@ describe("Timeout and retry patterns", () => {
   it("plan resolves correct timeout per mode", () => {
     const config = makeConfig();
 
-    const lookupPlan = plan({ query: "test" }, config);
-    expect(lookupPlan.timeoutMs).toBe(6000);
+    const lookupPlan = plan({ query: "test", mode: "lookup" }, config);
+    expect(lookupPlan.timeoutMs).toBe(60000);
 
     const agenticPlan = plan({ query: "test", mode: "agentic" }, config);
-    expect(agenticPlan.timeoutMs).toBe(20000);
+    expect(agenticPlan.timeoutMs).toBe(120000);
 
     const deepPlan = plan({ query: "test", mode: "deep" }, config);
     expect(deepPlan.timeoutMs).toBe(240000);

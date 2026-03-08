@@ -182,7 +182,7 @@ Set `KNOWLEDGE_PROVIDER=bm25` or `KNOWLEDGE_PROVIDER=openai` in `.env`.
 
 ## Web Search (Production-Grade)
 
-Agentic Nexus includes a production-grade web search module powered by OpenAI's Responses API with automatic Azure OpenAI fallback.
+Agentic Nexus includes a production-grade web search module powered by OpenAI's Responses API with automatic Azure OpenAI fallback. Full developer documentation: [docs/web-search.md](docs/web-search.md).
 
 ### Architecture
 
@@ -190,6 +190,7 @@ Agentic Nexus includes a production-grade web search module powered by OpenAI's 
 ┌──────────────────────────────────────────────────────────┐
 │  search(request) → SearchResponse                        │
 ├──────────────────────────────────────────────────────────┤
+│  index.ts    → unified facade, circuit breaker, cost cap │
 │  planner.ts  → depth mode, domain filters, time window   │
 │  provider.openai.ts → Responses API (web_search tool)    │
 │  provider.azure.ts  → Azure (web_search_preview)         │
@@ -201,11 +202,11 @@ Agentic Nexus includes a production-grade web search module powered by OpenAI's 
 
 ### Depth Modes
 
-| Mode | Description | SLO (p95) |
-|------|-------------|-----------|
-| `lookup` | Single search pass, low latency | ≤ 6s |
-| `agentic` | Reasoning model with evidence gathering (open_page/find_in_page) | ≤ 20s |
-| `deep` | Background thorough synthesis with multiple passes | ≤ 2-4 min |
+| Mode | Timeout | Model | Description |
+|------|---------|-------|-------------|
+| `lookup` | 60s | gpt-4o-mini | Single search pass, no page opens |
+| `agentic` | 120s | gpt-4o | Reasoning + open_page + find_in_page |
+| `deep` | 240s | gpt-4o | Thorough multi-pass research |
 
 ### Configuration
 
@@ -213,13 +214,17 @@ Edit `apps/server/config/web-search.json`:
 
 ```json
 {
+  "enabled": true,
+  "provider": "openai",
   "mode": "lookup",
+  "timeoutMs": 90000,
   "allowedDomains": ["bis.org", "imf.org", "rbi.org.in", "bankofengland.co.uk", "sec.gov", "europa.eu"],
-  "maxPages": 6,
-  "searchContextSize": "medium",
-  "defaultLocale": "en-IN",
-  "timeoutMs": { "lookup": 6000, "agentic": 20000, "deep": 240000 },
-  "maxCostUSD": 0.25
+  "blocklistDomains": [],
+  "maxPages": 5,
+  "maxCostUSD": 0.25,
+  "locale": "en-IN",
+  "retries": { "max": 3, "baseDelayMs": 1500, "exponent": 2.0 },
+  "circuitBreaker": { "consecutiveFailures": 3, "windowMs": 300000, "downgradeMode": "lookup" }
 }
 ```
 
@@ -229,12 +234,21 @@ Edit `apps/server/config/web-search.json`:
 |----------|-------------|
 | `WEB_SEARCH_ENABLED` | Enable/disable web search (`true`/`false`, default: `true`) |
 | `WEB_SEARCH_MODE` | Override depth mode (`lookup`/`agentic`/`deep`) |
-| `ALLOWED_DOMAINS` | Comma-separated domain allow-list override |
+| `WEB_SEARCH_ALLOWED_DOMAINS` | Comma-separated domain allow-list override |
+| `WEB_SEARCH_TIMEOUT_MS` | Global timeout override in ms |
+| `WEB_SEARCH_MAX_COST_USD` | Cost cap per search call |
+| `OPENAI_WEB_SEARCH_MODEL` | Override model for web search |
 | `AZURE_OPENAI_ENABLED` | Auto-switch to Azure (`true`/`false`) |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_DEPLOYMENT` | Azure deployment name |
-| `WEB_SEARCH_MODEL` | OpenAI model for search (default: `gpt-4o-mini`) |
+
+### Reliability
+
+- **Retry with exponential backoff**: configurable max, baseDelayMs, exponent (default: 3 retries, 1.5s base, 2x backoff)
+- **Circuit breaker**: 3 consecutive timeouts in 5 minutes auto-downgrades to lookup mode
+- **Cost cap**: if `maxCostUSD` exceeded mid-run, stops and synthesizes with current evidence
+- **Fallback**: graceful fallback to DuckDuckGo when no API keys configured
 
 ### Observability
 
@@ -245,22 +259,25 @@ The module emits structured metric events:
 
 Subscribe with: `onMetric((event) => { ... })` from `webSearchTool/index.ts`.
 
-### Precision Testing
-
-Run the 20-prompt golden-set evaluation:
+### Testing
 
 ```bash
-npx tsx scripts/precision-run.ts
-```
+# Unit tests (schemas, planner, reranker, circuit breaker)
+npx vitest run src/tools/webSearchTool/__tests__/webSearchTool.test.ts
 
-Outputs: `scripts/precision-results.csv` and `scripts/precision-summary.json` with precision@k, avg citations/answer, p95 latency, and avg cost/call.
+# 20-prompt golden-set precision tests
+npx vitest run src/tools/webSearchTool/__tests__/precision.test.ts
+
+# Smoke test (requires API key or uses fallback)
+npx tsx scripts/search-smoke.ts
+```
 
 ### SRE Runbook
 
 | Symptom | Check | Fix |
 |---------|-------|-----|
 | "OPENAI_API_KEY not configured" | Verify `.env` has `OPENAI_API_KEY` | Add key, restart server |
-| High latency (>6s lookup) | Check `WEB_SEARCH_MODE` | Ensure mode is `lookup` for fast queries |
+| Circuit breaker active | Check logs for `CircuitBreaker WARN` | Wait for auto-reset or fix upstream |
 | Cost overrun | Check `maxCostUSD` in config | Lower cap or switch to `lookup` mode |
 | Azure compliance banner | Expected when `AZURE_OPENAI_ENABLED=true` | No action needed |
 | Fallback to DuckDuckGo | No API keys configured | Add `OPENAI_API_KEY` for production search |

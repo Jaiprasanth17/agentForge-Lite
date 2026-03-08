@@ -3,10 +3,13 @@
  *
  * Responsibilities:
  * - Reformulate user queries into optimised search prompts
- * - Apply site/domain allow-list and ban-list filters
+ * - Apply site/domain allow-list and block-list filters
  * - Set time window hints based on recency signals
  * - Select language/locale
  * - Choose depth mode (lookup / agentic / deep)
+ *
+ * References:
+ * - [REF A] https://developers.openai.com/api/docs/guides/tools-web-search
  */
 
 import type { SearchMode, SearchContextSize, WebSearchConfig, SearchRequest } from "./schemas";
@@ -26,8 +29,8 @@ export interface PlannedQuery {
   timeoutMs: number;
   /** Domain allow-list to pass to the API / Agents SDK filters */
   allowedDomains: string[];
-  /** Domain ban-list */
-  bannedDomains: string[];
+  /** Domain block-list */
+  blocklistDomains: string[];
   /** Locale hint */
   locale: string;
   /** User location hint */
@@ -37,6 +40,16 @@ export interface PlannedQuery {
   /** Cost cap for this call */
   maxCostUSD: number;
 }
+
+// ---------------------------------------------------------------------------
+// Mode-specific timeout defaults
+// ---------------------------------------------------------------------------
+
+const MODE_TIMEOUTS: Record<SearchMode, number> = {
+  lookup: 60000,
+  agentic: 120000,
+  deep: 240000,
+};
 
 // ---------------------------------------------------------------------------
 // Recency detection
@@ -219,9 +232,9 @@ function buildSearchPrompt(
 export function isDomainAllowed(
   url: string,
   allowedDomains: string[],
-  bannedDomains: string[],
+  blocklistDomains: string[],
 ): boolean {
-  if (allowedDomains.length === 0 && bannedDomains.length === 0) return true;
+  if (allowedDomains.length === 0 && blocklistDomains.length === 0) return true;
 
   let hostname: string;
   try {
@@ -230,14 +243,14 @@ export function isDomainAllowed(
     return false;
   }
 
-  // Ban-list takes priority
-  if (bannedDomains.length > 0) {
-    for (const banned of bannedDomains) {
-      if (hostname === banned || hostname.endsWith(`.${banned}`)) return false;
+  // Block-list takes priority
+  if (blocklistDomains.length > 0) {
+    for (const blocked of blocklistDomains) {
+      if (hostname === blocked || hostname.endsWith(`.${blocked}`)) return false;
     }
   }
 
-  // If no allow-list, all non-banned domains pass
+  // If no allow-list, all non-blocked domains pass
   if (allowedDomains.length === 0) return true;
 
   // Check allow-list
@@ -250,9 +263,9 @@ export function isDomainAllowed(
 export function filterDomains(
   urls: string[],
   allowedDomains: string[],
-  bannedDomains: string[],
+  blocklistDomains: string[],
 ): string[] {
-  return urls.filter((u) => isDomainAllowed(u, allowedDomains, bannedDomains));
+  return urls.filter((u) => isDomainAllowed(u, allowedDomains, blocklistDomains));
 }
 
 // ---------------------------------------------------------------------------
@@ -262,14 +275,20 @@ export function filterDomains(
 export function plan(request: SearchRequest, config: WebSearchConfig): PlannedQuery {
   const mode = request.mode ?? inferMode(request.query, config.mode);
   const allowedDomains = request.allowedDomains ?? config.allowedDomains;
-  const bannedDomains = request.bannedDomains ?? config.bannedDomains;
-  const locale = request.locale ?? config.defaultLocale;
+  const blocklistDomains = request.blocklistDomains ?? config.blocklistDomains;
+  const locale = request.locale ?? config.locale;
   const searchContextSize = request.searchContextSize ?? config.searchContextSize;
   const maxPages = request.maxPages ?? config.maxPages;
   const maxCostUSD = request.maxCostUSD ?? config.maxCostUSD;
   const userLocation = request.userLocation ?? config.userLocation;
 
-  const timeoutMs = request.timeoutMs ?? config.timeoutMs[mode];
+  // Use mode-specific timeout if no override, falling back to config.timeoutMs
+  const timeoutMs = request.timeoutMs ?? MODE_TIMEOUTS[mode] ?? config.timeoutMs;
+
+  // Warn if allowedDomains is empty
+  if (allowedDomains.length === 0) {
+    console.warn("[WebSearch:planner] WARNING: allowedDomains is empty – all domains permitted.");
+  }
 
   const timeWindow = extractTimeWindow(request.query);
   const prompt = buildSearchPrompt(request.query, timeWindow, allowedDomains, locale);
@@ -280,7 +299,7 @@ export function plan(request: SearchRequest, config: WebSearchConfig): PlannedQu
     searchContextSize,
     timeoutMs,
     allowedDomains,
-    bannedDomains,
+    blocklistDomains,
     locale,
     userLocation,
     maxPages,

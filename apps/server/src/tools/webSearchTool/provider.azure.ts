@@ -2,15 +2,16 @@
  * Azure OpenAI Web Search Provider (Preview)
  *
  * Uses Azure OpenAI's `web_search_preview` tool type for web search
- * grounded with Bing. Automatically activated when AZURE_OPENAI_ENABLED=true.
+ * grounded with Bing. Automatically activated when AZURE_OPENAI_ENABLED=true
+ * or config.provider === "azure".
  *
  * Key differences from OpenAI provider:
- * - Tool type is "web_search_preview" instead of "web_search"
+ * - Tool type is "web_search_preview" instead of "web_search"  [REF B]
  * - Uses Azure-specific endpoint and API key
  * - Subject to Grounding with Bing data-flow and governance constraints
  * - Requires Azure OpenAI deployment name instead of model name
  *
- * Reference: https://learn.microsoft.com/azure/foundry/openai/how-to/web-search
+ * Reference: [REF B] https://learn.microsoft.com/azure/foundry/openai/how-to/web-search
  *
  * COMPLIANCE NOTES:
  * - Data from Bing is subject to Microsoft's privacy policy
@@ -20,7 +21,8 @@
  */
 
 import type { PlannedQuery } from "./planner";
-import type { Citation, Source, SearchAction, SearchDebug } from "./schemas";
+import type { Citation, Source, SearchDebug, RetryConfig } from "./schemas";
+import { retryFetch } from "./provider.openai";
 
 // ---------------------------------------------------------------------------
 // Types (mirrors OpenAI structure with Azure-specific fields)
@@ -91,36 +93,7 @@ export function isAzureEnabled(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Retry helper
-// ---------------------------------------------------------------------------
-
-async function retryFetch(
-  url: string,
-  init: RequestInit,
-  retries: number,
-  baseDelayMs: number,
-): Promise<Response> {
-  let lastError: Error | undefined;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const resp = await fetch(url, init);
-      if (resp.ok || (resp.status < 500 && resp.status !== 429)) {
-        return resp;
-      }
-      lastError = new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-    if (attempt < retries) {
-      const delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * baseDelayMs;
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  throw lastError ?? new Error("Azure fetch failed after retries");
-}
-
-// ---------------------------------------------------------------------------
-// Citation & action extraction (same structure as OpenAI, tool type differs)
+// Citation & source extraction (same structure as OpenAI, tool type differs)
 // ---------------------------------------------------------------------------
 
 function extractCitations(output: AzureOutputItem[]): Citation[] {
@@ -135,11 +108,8 @@ function extractCitations(output: AzureOutputItem[]): Citation[] {
         if (ann.type === "url_citation" && ann.url && !seenUrls.has(ann.url)) {
           seenUrls.add(ann.url);
           citations.push({
-            index: citations.length + 1,
-            title: ann.title || ann.url,
             url: ann.url,
-            startIndex: ann.start_index,
-            endIndex: ann.end_index,
+            title: ann.title || undefined,
           });
         }
       }
@@ -149,26 +119,25 @@ function extractCitations(output: AzureOutputItem[]): Citation[] {
   return citations;
 }
 
-function extractActions(output: AzureOutputItem[]): { actions: SearchAction[]; callId: string } {
-  const actions: SearchAction[] = [];
-  let callId = "";
+function extractSources(output: AzureOutputItem[]): Source[] {
+  const sources: Source[] = [];
 
   for (const item of output) {
     if (item.type === "web_search_call") {
-      if (item.id) callId = item.id;
       if (item.action) {
         const actionType = item.action.type as "search" | "open_page" | "find_in_page";
         if (["search", "open_page", "find_in_page"].includes(actionType)) {
-          actions.push({
-            type: actionType,
-            url: item.action.url || item.action.query,
+          sources.push({
+            url: item.action.url || item.action.query || "",
+            action: actionType,
+            id: item.id || "",
           });
         }
       }
     }
   }
 
-  return { actions, callId };
+  return sources;
 }
 
 function extractAnswer(response: AzureResponsesAPIResponse): string {
@@ -187,23 +156,13 @@ function extractAnswer(response: AzureResponsesAPIResponse): string {
   return "";
 }
 
-function citationsToSources(citations: Citation[]): Source[] {
-  return citations.map((c) => ({
-    title: c.title,
-    url: c.url,
-    snippet: "",
-    credibilityScore: undefined,
-  }));
-}
-
 // ---------------------------------------------------------------------------
 // Main Azure search function
 // ---------------------------------------------------------------------------
 
 export async function azureWebSearch(
   planned: PlannedQuery,
-  retries: number = 3,
-  retryBaseDelayMs: number = 1000,
+  retryConfig: RetryConfig,
 ): Promise<AzureSearchResult> {
   const apiKey = getAzureApiKey();
   const endpoint = getAzureEndpoint();
@@ -215,7 +174,7 @@ export async function azureWebSearch(
     );
   }
 
-  // Emit compliance banner
+  // Emit compliance banner [REF B]
   console.log(
     "[WebSearch:Azure] Using Azure OpenAI web_search_preview. " +
     "Results are grounded with Bing and subject to Microsoft's privacy policy and " +
@@ -227,14 +186,23 @@ export async function azureWebSearch(
 
   const url = `${endpoint}/openai/deployments/${deployment}/responses?api-version=${apiVersion}`;
 
+  // Build tool configuration – type is "web_search_preview" for Azure [REF B]
+  const webSearchTool: Record<string, unknown> = {
+    type: "web_search_preview",
+    ...(planned.searchContextSize ? { search_context_size: planned.searchContextSize } : {}),
+  };
+
+  // Apply user_location if available
+  if (planned.userLocation && (planned.userLocation.city || planned.userLocation.country)) {
+    const loc: Record<string, string> = { type: "approximate" };
+    if (planned.userLocation.city) loc.city = planned.userLocation.city;
+    if (planned.userLocation.country) loc.country = planned.userLocation.country;
+    webSearchTool.user_location = loc;
+  }
+
   const body = {
     input: planned.prompt,
-    tools: [
-      {
-        type: "web_search_preview",
-        ...(planned.searchContextSize ? { search_context_size: planned.searchContextSize } : {}),
-      },
-    ],
+    tools: [webSearchTool],
   };
 
   const resp = await retryFetch(
@@ -248,8 +216,7 @@ export async function azureWebSearch(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(planned.timeoutMs),
     },
-    retries,
-    retryBaseDelayMs,
+    retryConfig,
   );
 
   if (!resp.ok) {
@@ -262,27 +229,21 @@ export async function azureWebSearch(
 
   const answer = extractAnswer(data);
   const citations = extractCitations(data.output);
-  const { actions, callId } = extractActions(data.output);
-  const sources = citationsToSources(citations);
+  const sources = extractSources(data.output);
 
   const tokensIn = data.usage?.input_tokens ?? 0;
   const tokensOut = data.usage?.output_tokens ?? 0;
-  // Azure pricing varies by deployment; use a conservative estimate
-  const costUSD = (tokensIn * 0.15 + tokensOut * 0.60) / 1_000_000;
+  // Azure pricing varies by deployment; use a conservative estimate + tool call cost
+  const costUSD = (tokensIn * 0.15 + tokensOut * 0.60) / 1_000_000 + 0.03;
 
   return {
     answer,
     citations,
     sources,
     debug: {
-      callId: callId || data.id,
-      actions,
-      costUSD,
+      toolCalls: data.output.filter((o) => o.type === "web_search_call"),
       latencyMs,
-      provider: "azure",
-      mode: planned.mode,
-      tokensIn,
-      tokensOut,
+      cost: { toolCallsUSD: costUSD },
     },
   };
 }

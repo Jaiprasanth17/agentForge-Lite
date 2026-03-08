@@ -52,8 +52,11 @@ registerTool({
           lastSerpResults.clear();
           const mapped = response.sources.map((s, i) => {
             const id = `serp_${i}`;
-            lastSerpResults.set(id, { url: s.url, title: s.title });
-            return { id, title: s.title, url: s.url, snippet: s.snippet };
+            // Find matching citation for title
+            const matchingCitation = response.citations.find((c) => c.url === s.url);
+            const title = matchingCitation?.title || s.url;
+            lastSerpResults.set(id, { url: s.url, title });
+            return { id, title, url: s.url, snippet: s.action };
           });
 
           return {

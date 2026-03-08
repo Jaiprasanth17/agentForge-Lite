@@ -53,8 +53,6 @@ const AUTHORITY_DOMAINS: Record<string, number> = {
   "developer.mozilla.org": 8,
   "stackoverflow.com": 7,
   "learn.microsoft.com": 8,
-
-  // General .gov / .edu / .org boost
 };
 
 const DOMAIN_SUFFIX_SCORES: { suffix: string; score: number }[] = [
@@ -105,7 +103,7 @@ function getBaseDomain(hostname: string): string {
 }
 
 /** Score a URL based on domain authority */
-function scoreDomain(url: string, allowedDomains: string[]): number {
+export function scoreDomain(url: string, allowedDomains: string[]): number {
   const hostname = extractHostname(url);
   if (!hostname) return 0;
   const baseDomain = getBaseDomain(hostname);
@@ -141,10 +139,10 @@ function scoreDomain(url: string, allowedDomains: string[]): number {
 // ---------------------------------------------------------------------------
 
 /** Normalise URL for deduplication (remove trailing slash, query params, fragments) */
-function normaliseUrl(url: string): string {
+export function normaliseUrl(url: string): string {
   try {
     const u = new URL(url);
-    let path = u.pathname.replace(/\/+$/, "") || "/";
+    const path = u.pathname.replace(/\/+$/, "") || "/";
     return `${u.hostname.replace(/^www\./, "")}${path}`.toLowerCase();
   } catch {
     return url.toLowerCase();
@@ -152,7 +150,7 @@ function normaliseUrl(url: string): string {
 }
 
 /** Simple text similarity based on shared 3-gram overlap */
-function textSimilarity(a: string, b: string): number {
+export function textSimilarity(a: string, b: string): number {
   if (!a || !b) return 0;
   const aNorm = a.toLowerCase().slice(0, 500);
   const bNorm = b.toLowerCase().slice(0, 500);
@@ -177,10 +175,10 @@ function textSimilarity(a: string, b: string): number {
 // Reranker interface
 // ---------------------------------------------------------------------------
 
-export interface RankedSource extends Source {
+export interface RankedCitation extends Citation {
   /** Normalised score (0-1) */
   score: number;
-  /** Original credibility score */
+  /** Original domain authority score */
   domainScore: number;
 }
 
@@ -198,97 +196,64 @@ export interface RerankerOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Deduplicate, merge, and rerank sources.
+ * Deduplicate, merge, and rerank citations and sources.
  *
  * 1. Remove exact URL duplicates
- * 2. Remove near-duplicate content (text similarity > threshold)
- * 3. Score by domain authority + allowed domain boost
- * 4. Sort descending by score
- * 5. Return top-k with normalised scores
+ * 2. Score by domain authority + allowed domain boost
+ * 3. Sort descending by score
+ * 4. Return top-k
  */
 export function rerank(
-  sources: Source[],
   citations: Citation[],
+  sources: Source[],
   options: RerankerOptions = {},
-): { sources: RankedSource[]; citations: Citation[] } {
+): { citations: RankedCitation[]; sources: Source[] } {
   const topK = options.topK ?? 5;
   const allowedDomains = options.allowedDomains ?? [];
-  const dedupeThreshold = options.dedupeThreshold ?? 0.8;
 
-  // Step 1: Merge sources and citations into a unified list
-  const allItems = new Map<string, Source>();
-  for (const s of sources) {
-    const key = normaliseUrl(s.url);
-    if (!allItems.has(key)) {
-      allItems.set(key, s);
-    }
-  }
+  // Deduplicate citations by URL
+  const seenUrls = new Set<string>();
+  const uniqueCitations: Citation[] = [];
   for (const c of citations) {
-    const key = normaliseUrl(c.url);
-    if (!allItems.has(key)) {
-      allItems.set(key, { title: c.title, url: c.url, snippet: "" });
+    const norm = normaliseUrl(c.url);
+    if (!seenUrls.has(norm)) {
+      seenUrls.add(norm);
+      uniqueCitations.push(c);
     }
   }
 
-  // Step 2: Near-duplicate removal
-  const unique: Source[] = [];
-  const uniqueSnippets: string[] = [];
-  for (const item of allItems.values()) {
-    const snippet = item.snippet || item.title;
-    let isDupe = false;
-    for (const existing of uniqueSnippets) {
-      if (textSimilarity(snippet, existing) > dedupeThreshold) {
-        isDupe = true;
-        break;
-      }
-    }
-    if (!isDupe) {
-      unique.push(item);
-      uniqueSnippets.push(snippet);
-    }
-  }
-
-  // Step 3: Score and rank
-  const scored: RankedSource[] = unique.map((s) => {
-    const domainScore = scoreDomain(s.url, allowedDomains);
+  // Score and rank citations
+  const scored: RankedCitation[] = uniqueCitations.map((c) => {
+    const domainScore = scoreDomain(c.url, allowedDomains);
     return {
-      ...s,
-      credibilityScore: domainScore,
+      ...c,
       domainScore,
-      score: domainScore / 10, // Normalise to 0-1
+      score: domainScore / 10,
     };
   });
 
   scored.sort((a, b) => b.score - a.score);
 
-  // Step 4: Take top-k
-  const topSources = scored.slice(0, topK);
+  const topCitations = scored.slice(0, topK);
 
-  // Step 5: Filter citations to only include those with URLs in the top sources
-  const topUrls = new Set(topSources.map((s) => normaliseUrl(s.url)));
-  const filteredCitations = citations.filter((c) => topUrls.has(normaliseUrl(c.url)));
-
-  // Re-index citations
-  const reindexed = filteredCitations.map((c, i) => ({ ...c, index: i + 1 }));
-
-  return { sources: topSources, citations: reindexed };
+  return { citations: topCitations, sources };
 }
 
 /**
- * Merge results from multiple search passes (e.g., lookup + follow-up).
+ * Merge results from multiple search passes.
  * Deduplicates and reranks the combined set.
  */
 export function mergeSearchResults(
-  results: { sources: Source[]; citations: Citation[] }[],
+  results: { citations: Citation[]; sources: Source[] }[],
   options: RerankerOptions = {},
-): { sources: RankedSource[]; citations: Citation[] } {
-  const allSources: Source[] = [];
+): { citations: RankedCitation[]; sources: Source[] } {
   const allCitations: Citation[] = [];
+  const allSources: Source[] = [];
 
   for (const r of results) {
-    allSources.push(...r.sources);
     allCitations.push(...r.citations);
+    allSources.push(...r.sources);
   }
 
-  return rerank(allSources, allCitations, options);
+  return rerank(allCitations, allSources, options);
 }
