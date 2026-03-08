@@ -1,0 +1,27 @@
+{
+  "mode": "lookup",
+  "allowedDomains": [
+    "bis.org",
+    "imf.org",
+    "rbi.org.in",
+    "bankofengland.co.uk",
+    "sec.gov",
+    "europa.eu"
+  ],
+  "bannedDomains": [],
+  "maxPages": 6,
+  "searchContextSize": "medium",
+  "defaultLocale": "en-IN",
+  "userLocation": {
+    "city": "Hyderabad",
+    "country": "IN"
+  },
+  "timeoutMs": {
+    "lookup": 6000,
+    "agentic": 20000,
+    "deep": 240000
+  },
+  "maxCostUSD": 0.25,
+  "retries": 3,
+  "retryBaseDelayMs": 1000
+}

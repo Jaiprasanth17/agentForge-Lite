@@ -180,6 +180,92 @@ Set `KNOWLEDGE_PROVIDER=bm25` or `KNOWLEDGE_PROVIDER=openai` in `.env`.
 
 **Sample PDF:** A quickstart guide is included at `apps/server/knowledge/pdfs/agentic-nexus-quickstart.pdf` for demo purposes.
 
+## Web Search (Production-Grade)
+
+Agentic Nexus includes a production-grade web search module powered by OpenAI's Responses API with automatic Azure OpenAI fallback.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  search(request) → SearchResponse                        │
+├──────────────────────────────────────────────────────────┤
+│  planner.ts  → depth mode, domain filters, time window   │
+│  provider.openai.ts → Responses API (web_search tool)    │
+│  provider.azure.ts  → Azure (web_search_preview)         │
+│  reranker.ts → dedup, domain emphasis, top-k scoring     │
+│  schemas.ts  → Zod-validated SearchRequest/Response       │
+│  Fallback    → Legacy DuckDuckGo (no API key needed)     │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Depth Modes
+
+| Mode | Description | SLO (p95) |
+|------|-------------|-----------|
+| `lookup` | Single search pass, low latency | ≤ 6s |
+| `agentic` | Reasoning model with evidence gathering (open_page/find_in_page) | ≤ 20s |
+| `deep` | Background thorough synthesis with multiple passes | ≤ 2-4 min |
+
+### Configuration
+
+Edit `apps/server/config/web-search.json`:
+
+```json
+{
+  "mode": "lookup",
+  "allowedDomains": ["bis.org", "imf.org", "rbi.org.in", "bankofengland.co.uk", "sec.gov", "europa.eu"],
+  "maxPages": 6,
+  "searchContextSize": "medium",
+  "defaultLocale": "en-IN",
+  "timeoutMs": { "lookup": 6000, "agentic": 20000, "deep": 240000 },
+  "maxCostUSD": 0.25
+}
+```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `WEB_SEARCH_ENABLED` | Enable/disable web search (`true`/`false`, default: `true`) |
+| `WEB_SEARCH_MODE` | Override depth mode (`lookup`/`agentic`/`deep`) |
+| `ALLOWED_DOMAINS` | Comma-separated domain allow-list override |
+| `AZURE_OPENAI_ENABLED` | Auto-switch to Azure (`true`/`false`) |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
+| `AZURE_OPENAI_DEPLOYMENT` | Azure deployment name |
+| `WEB_SEARCH_MODEL` | OpenAI model for search (default: `gpt-4o-mini`) |
+
+### Observability
+
+The module emits structured metric events:
+- `tool.web_search.start` — search initiated
+- `tool.web_search.done` — search completed (includes latency, cost, citation count)
+- `tool.web_search.error` — search failed
+
+Subscribe with: `onMetric((event) => { ... })` from `webSearchTool/index.ts`.
+
+### Precision Testing
+
+Run the 20-prompt golden-set evaluation:
+
+```bash
+npx tsx scripts/precision-run.ts
+```
+
+Outputs: `scripts/precision-results.csv` and `scripts/precision-summary.json` with precision@k, avg citations/answer, p95 latency, and avg cost/call.
+
+### SRE Runbook
+
+| Symptom | Check | Fix |
+|---------|-------|-----|
+| "OPENAI_API_KEY not configured" | Verify `.env` has `OPENAI_API_KEY` | Add key, restart server |
+| High latency (>6s lookup) | Check `WEB_SEARCH_MODE` | Ensure mode is `lookup` for fast queries |
+| Cost overrun | Check `maxCostUSD` in config | Lower cap or switch to `lookup` mode |
+| Azure compliance banner | Expected when `AZURE_OPENAI_ENABLED=true` | No action needed |
+| Fallback to DuckDuckGo | No API keys configured | Add `OPENAI_API_KEY` for production search |
+| Citations missing | Check API response annotations | Verify model supports web_search tool |
+
 ## Tools Registry
 
 All tools use a typed registry with zod validation. Unknown tool names return `{ok: false, code: 'TOOL_NOT_FOUND'}` without crashing. Invalid inputs return `{ok: false, code: 'TOOL_VALIDATION'}` with readable error messages.

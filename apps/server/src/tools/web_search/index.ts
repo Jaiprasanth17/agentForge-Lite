@@ -3,6 +3,7 @@
  *
  * Registers two tools:
  * 1. search_web - Performs web search queries, returns top 5 SERP results
+ *    (delegates to production-grade webSearchTool when API keys available)
  * 2. click - Fetches and extracts content from a specific URL
  *
  * Also exports the query rewrite agent and compression utilities.
@@ -18,6 +19,8 @@ import { rewriteQuery, shouldSearch } from "./queryRewrite";
 import { estimateTokens, MAX_SEARCH_CONTENT_TOKENS } from "./utils";
 import type { SerpResult } from "./cache";
 import { lastSerpResults } from "./cache";
+import { search as productionSearch, isWebSearchEnabled } from "../webSearchTool";
+import type { SearchResponse } from "../webSearchTool";
 
 // ---------------------------------------------------------------------------
 // search_web tool registration
@@ -38,6 +41,41 @@ registerTool({
     const { queries } = input as { queries: string[] };
 
     try {
+      // Try production-grade search (OpenAI Responses API / Azure) first
+      const hasProductionKeys = !!(process.env.OPENAI_API_KEY || process.env.AZURE_OPENAI_API_KEY);
+      if (hasProductionKeys && isWebSearchEnabled()) {
+        try {
+          const combinedQuery = queries.join("; ");
+          const response: SearchResponse = await productionSearch({ query: combinedQuery });
+
+          // Map response to legacy format for backward compatibility
+          lastSerpResults.clear();
+          const mapped = response.sources.map((s, i) => {
+            const id = `serp_${i}`;
+            lastSerpResults.set(id, { url: s.url, title: s.title });
+            return { id, title: s.title, url: s.url, snippet: s.snippet };
+          });
+
+          return {
+            ok: true,
+            data: {
+              results: mapped,
+              count: response.sources.length,
+              answer: response.answer,
+              citations: response.citations,
+              debug: response.debug,
+            },
+          };
+        } catch (productionErr) {
+          console.warn(
+            "[WebSearch] Production search failed, falling back to legacy:",
+            productionErr instanceof Error ? productionErr.message : productionErr
+          );
+          // Fall through to legacy search
+        }
+      }
+
+      // Legacy DuckDuckGo search fallback
       const results = await searchWeb(queries);
 
       if (results.length === 0) {
