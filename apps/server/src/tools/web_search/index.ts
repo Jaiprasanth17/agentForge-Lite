@@ -70,11 +70,18 @@ registerTool({
             },
           };
         } catch (productionErr) {
-          console.warn(
-            "[WebSearch] Production search failed, falling back to legacy:",
-            productionErr instanceof Error ? productionErr.message : productionErr
-          );
-          // Fall through to legacy search
+          // log the failure so developers can diagnose
+          const msg = productionErr instanceof Error ? productionErr.message : String(productionErr);
+          console.error("[WebSearch] Production search failed, will fall back to legacy:", msg);
+
+          // if an API key was provided we treat this as a configuration/runtime
+          // issue and bubble the error up rather than silently returning a stale
+          // DuckDuckGo result.  This makes it easier to notice that the OpenAI
+          // provider isn't working (e.g. invalid key or network problem).
+          if (hasProductionKeys) {
+            throw productionErr;
+          }
+          // Otherwise fall through to legacy search
         }
       }
 
