@@ -127,7 +127,19 @@ export async function executeWorkflow(workflowId: string, runId: string, inputTe
           function: {
             name: "search_web",
             description: "Search the web for information. Use when user asks for current events, facts beyond model knowledge, or when unsure.",
-            parameters: { type: "object", properties: { queries: { type: "array", items: { type: "string" }, description: "List of focused search queries" } }, required: ["queries"] },
+            parameters: {
+              type: "object",
+              properties: {
+                queries: {
+                  type: "array",
+                  items: { type: "string" },
+                  minItems: 1,
+                  maxItems: 5,
+                  description: "List of focused search queries"
+                }
+              },
+              required: ["queries"]
+            },
           },
         });
         availableTools.push({

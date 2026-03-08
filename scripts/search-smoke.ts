@@ -13,6 +13,12 @@
  *   (Falls back to DuckDuckGo if no API keys are set)
  */
 
+import dotenv from "dotenv";
+import path from "path";
+
+// Load .env from project root
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
+
 import { search, loadConfig, onMetric, resetConfig } from "../apps/server/src/tools/webSearchTool";
 
 async function main() {

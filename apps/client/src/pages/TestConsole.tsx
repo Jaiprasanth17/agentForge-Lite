@@ -390,6 +390,10 @@ export default function TestConsole() {
               <p className="text-sm text-dark-200 mt-1">{agent.role || "Not set"}</p>
             </div>
             <div>
+              <label className="text-xs font-medium text-dark-400 uppercase tracking-wider">Instructions</label>
+              <p className="text-sm text-dark-200 mt-1 whitespace-pre-wrap">{agent.system || "Not set"}</p>
+            </div>
+            <div>
               <label className="text-xs font-medium text-dark-400 uppercase tracking-wider">Tools</label>
               <div className="flex flex-wrap gap-1.5 mt-1">
                 {Object.entries(agent.tools)
