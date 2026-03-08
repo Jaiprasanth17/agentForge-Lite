@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 // Test helpers that import registry/tools after resetting module cache
 async function loadRegistryAndTools() {
@@ -45,8 +45,10 @@ describe("search_web production error handling", () => {
     const res = await invokeTool(ctx, "search_web", { queries: ["foo"] });
 
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("invalid key");
-    // handler returns SEARCH_FAILED when web search fails internally
-    expect(res.code).toBe("SEARCH_FAILED");
+    if (!res.ok) {
+      expect(res.error).toContain("invalid key");
+      // handler returns SEARCH_FAILED when web search fails internally
+      expect(res.code).toBe("SEARCH_FAILED");
+    }
   });
 });

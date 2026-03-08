@@ -42,6 +42,7 @@ interface ChatMessage {
   citations?: KnowledgeCitation[];
   searchResults?: SearchResult[];
   searchCitations?: SearchCitation[];
+  searchAnalysis?: string;
 }
 
 interface UsageStats {
@@ -187,6 +188,12 @@ export default function TestConsole() {
             }
           }
 
+          // Extract search analysis
+          let searchAnalysis: string | undefined;
+          if (data.ok && data.name === "search_web" && data.data?.analysis) {
+            searchAnalysis = data.data.analysis;
+          }
+
           // Handle click results (page content)
           if (data.ok && data.name === "click" && data.data) {
             searchCitations.push({
@@ -227,6 +234,7 @@ export default function TestConsole() {
               citations: citations.length > 0 ? citations : undefined,
               searchResults: searchResults.length > 0 ? searchResults : undefined,
               searchCitations: searchCitations.length > 0 ? searchCitations : undefined,
+              searchAnalysis: searchAnalysis,
             },
           ]);
           break;
@@ -560,6 +568,18 @@ export default function TestConsole() {
                   </div>
                 )}
                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                {msg.searchAnalysis && (
+                  <div className="mt-3 bg-gradient-to-r from-accent/10 to-accent/5 border border-accent/20 rounded-lg p-3">
+                    <div className="text-xs text-accent-light font-bold mb-2 uppercase tracking-wider">🤖 AI Analysis</div>
+                    <div className="text-sm leading-relaxed text-dark-100 prose prose-invert max-w-none">
+                      {msg.searchAnalysis.split('\n').map((para, i) => (
+                        <p key={i} className="mb-2 last:mb-0 whitespace-pre-wrap">
+                          {para}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {msg.citations && msg.citations.length > 0 && (
                   <div className="mt-2 space-y-2 border-t border-dark-600 pt-2">
                     <div className="text-xs text-accent-light font-medium">Citations:</div>

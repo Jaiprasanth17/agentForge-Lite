@@ -21,6 +21,91 @@ import type { SerpResult } from "./cache";
 import { lastSerpResults } from "./cache";
 import { search as productionSearch, isWebSearchEnabled } from "../webSearchTool";
 import type { SearchResponse } from "../webSearchTool";
+import { getProvider } from "../../providers";
+
+// Helper to summarize search results using LLM
+async function summarizeResults(query: string, results: any[], citations: any[]): Promise<string | null> {
+  try {
+    const hasOpenAI = !!process.env.OPENAI_API_KEY;
+    if (!hasOpenAI) {
+      console.log("[WebSearch] No OpenAI key, skipping summarization");
+      return null;
+    }
+
+    const provider = getProvider("openai");
+    if (!provider) {
+      console.log("[WebSearch] No OpenAI provider available for summarization");
+      return null;
+    }
+
+    // Format results for analysis
+    const formattedResults = results
+      .map((r, i) => `[${i + 1}] ${r.title}: ${r.snippet}`)
+      .join("\n\n");
+
+    const summaryPrompt = `You are a research analyst. Analyze these search results for the query "${query}" and provide a comprehensive summary:
+
+${formattedResults}
+
+Provide:
+1. Key findings (main insights from the results)
+2. Relevant details (important information to understand)
+3. Overall conclusion (synthesized summary)
+
+Be concise but informative (3-5 sentences max).`;
+
+    console.log("[WebSearch] Starting summarization for query:", query);
+
+    let summary = "";
+    let isResolved = false;
+
+    const summaryPromise = new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          reject(new Error("Summarization timeout - stream did not complete"));
+        }
+      }, 15000); // 15 second timeout
+
+      try {
+        provider.generate({
+          model: process.env.OPENAI_WEB_SEARCH_MODEL || "gpt-4o-mini",
+          system: "You are a helpful research assistant. Synthesize search results into clear, comprehensive summaries with key findings and insights.",
+          messages: [{ role: "user", content: summaryPrompt }],
+          temperature: 0.5,
+          maxTokens: 500,
+          onChunk: (chunk) => {
+            if (chunk.text) {
+              summary += chunk.text;
+              console.log("[WebSearch] Chunk received, total length:", summary.length);
+            }
+            if (chunk.done) {
+              clearTimeout(timeout);
+              if (!isResolved) {
+                isResolved = true;
+                console.log("[WebSearch] Summarization complete, length:", summary.length);
+                resolve(summary);
+              }
+            }
+          },
+        });
+      } catch (streamErr) {
+        clearTimeout(timeout);
+        if (!isResolved) {
+          isResolved = true;
+          reject(streamErr);
+        }
+      }
+    });
+
+    const result = await summaryPromise;
+    return result && result.trim().length > 0 ? result : null;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.warn("[WebSearch] Summarization failed:", errorMsg);
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // search_web tool registration
@@ -64,6 +149,7 @@ registerTool({
             data: {
               results: mapped,
               count: response.sources.length,
+              analysis: response.answer, // Use OpenAI's answer as the analysis
               answer: response.answer,
               citations: response.citations,
               debug: response.debug,
@@ -107,11 +193,16 @@ registerTool({
         return { id, title: r.title, url: r.url, snippet: r.snippet };
       });
 
+      // Generate AI-powered summary of fallback results
+      const analysis = await summarizeResults(queries[0], mapped, []);
+
       return {
         ok: true,
         data: {
           results: mapped,
           count: results.length,
+          analysis: analysis || undefined,
+          note: "Using fallback search - for better analysis use OpenAI Responses API",
         },
       };
     } catch (err) {
